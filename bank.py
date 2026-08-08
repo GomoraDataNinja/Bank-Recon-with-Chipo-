@@ -1,11 +1,17 @@
 import subprocess
 import sys
 import os
+import site
 import warnings
 
 # ==============================================
 # FORCE INSTALL MISSING DEPENDENCIES (failsafe)
 # ==============================================
+# Create a writable directory for extra packages
+extra_lib = os.path.join(os.getcwd(), 'extra_libs')
+os.makedirs(extra_lib, exist_ok=True)
+sys.path.insert(0, extra_lib)
+
 required_packages = [
     'streamlit', 'pandas', 'numpy', 'openpyxl',
     'python-dateutil', 'xlrd'
@@ -15,17 +21,12 @@ for pkg in required_packages:
     try:
         __import__(pkg)
     except ImportError:
-        # Try with --user first (works on restricted environments)
-        try:
-            subprocess.check_call(
-                [sys.executable, "-m", "pip", "install", "--user", pkg]
-            )
-        except subprocess.CalledProcessError:
-            # Fallback: try without --user
-            subprocess.check_call(
-                [sys.executable, "-m", "pip", "install", pkg]
-            )
-        # Re-import after installation
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install",
+            "--target", extra_lib,
+            "--no-cache-dir",
+            pkg
+        ])
         __import__(pkg)
 
 # Now import everything normally
