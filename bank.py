@@ -28,7 +28,7 @@ warnings.filterwarnings("ignore")
 # =========================
 # App config & security
 # =========================
-APP_VERSION = "3.2.2"
+APP_VERSION = "3.2.3"
 APP_NAME = "Bank Reconciliation"
 DEPLOYMENT_MODE = os.environ.get("DEPLOYMENT_MODE", "production")
 SESSION_TIMEOUT_MINUTES = 60
@@ -61,8 +61,14 @@ def get_org_password():
 ORG_PASSWORD = get_org_password()
 
 # =========================
-# Theme (Wells Fargo red accent) – kept for main app, but login uses SPAR colors
+# SPAR Brand Colors
 # =========================
+SPAR_RED = "#EC1B24"
+SPAR_GREEN = "#157946"
+SPAR_WHITE = "#FFFFFF"
+SPAR_DARK_GREEN = "#0F5C34"
+
+# Theme – combines SPAR red and green
 THEME = {
     "bg": "#ffffff",
     "panel": "#ffffff",
@@ -71,17 +77,12 @@ THEME = {
     "muted": "#5b5b5b",
     "border": "rgba(0,0,0,0.10)",
     "border2": "rgba(0,0,0,0.14)",
-    "accent": "#D71E28",
-    "accent2": "#b5161f",
-    "good": "#168a45",
-    "bad": "#d11a2a",
+    "accent": SPAR_RED,
+    "accent2": SPAR_DARK_GREEN,
+    "good": SPAR_GREEN,
+    "bad": SPAR_RED,
     "neutral": "#6b7280",
 }
-
-# SPAR brand colors
-SPAR_RED = "#EC1B24"
-SPAR_GREEN = "#157946"
-SPAR_WHITE = "#FFFFFF"
 
 def apply_style():
     st.markdown(
@@ -145,7 +146,7 @@ def apply_style():
             border: 1px solid var(--border) !important;
             border-radius: 22px !important;
             padding: 26px 22px !important;
-            background: radial-gradient(900px 260px at 50% -10%, rgba(215,30,40,0.10), transparent 60%),
+            background: radial-gradient(900px 260px at 50% -10%, rgba(236,27,36,0.10), transparent 60%),
                         linear-gradient(180deg, #ffffff, #ffffff) !important;
         }}
         .title {{
@@ -194,7 +195,7 @@ def apply_style():
             font-size: 26px !important;
             font-weight: 850 !important;
             margin-top: 6px !important;
-            color: var(--accent) !important;
+            color: var(--good) !important;  /* SPAR green */
         }}
         div.stButton > button {{
             background: var(--accent) !important;
@@ -224,7 +225,7 @@ def apply_style():
             color: var(--accent) !important;
             font-weight: 750 !important;
         }}
-        /* SPAR logo badge */
+        /* SPAR logo badge – red and green */
         .spar-badge {{
             display: inline-block;
             background: {SPAR_RED};
@@ -235,11 +236,12 @@ def apply_style():
             border-radius: 30px;
             letter-spacing: 3px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            border: 3px solid {SPAR_GREEN};
         }}
         /* SPAR login styling */
         .spar-login-card {{
             background: {SPAR_WHITE} !important;
-            border: 2px solid {SPAR_RED} !important;
+            border: 3px solid {SPAR_RED} !important;
             border-radius: 24px !important;
             box-shadow: 0 12px 40px rgba(0,0,0,0.10) !important;
         }}
@@ -255,16 +257,16 @@ def apply_style():
             font-weight: 600 !important;
         }}
         .spar-login-btn > button {{
-            background: {SPAR_RED} !important;
-            border: 1px solid {SPAR_RED} !important;
+            background: {SPAR_GREEN} !important;
+            border: 1px solid {SPAR_GREEN} !important;
             color: {SPAR_WHITE} !important;
             font-weight: 800 !important;
             border-radius: 30px !important;
             padding: 0.8rem 1.5rem !important;
         }}
         .spar-login-btn > button:hover {{
-            background: {SPAR_GREEN} !important;
-            border-color: {SPAR_GREEN} !important;
+            background: {SPAR_DARK_GREEN} !important;
+            border-color: {SPAR_DARK_GREEN} !important;
         }}
         .spar-login-input > div > div {{
             border-radius: 30px !important;
@@ -321,7 +323,6 @@ def is_timed_out():
     return (datetime.now() - last).total_seconds() > SESSION_TIMEOUT_MINUTES * 60
 
 def logout():
-    # Set authenticated to False and clear everything except session_id and last_activity
     st.session_state.authenticated = False
     for k in list(st.session_state.keys()):
         if k not in ["session_id", "last_activity"]:
@@ -392,7 +393,6 @@ def login_screen():
     st.markdown('<div style="height: 2rem;"></div>', unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 1.2, 1])
     with c2:
-        # SPAR logo and title inside a card with SPAR colors
         st.markdown(
             f"""
             <div class="card spar-login-card" style="margin-top: 2vh; padding: 30px 30px !important; text-align:center;">
@@ -413,7 +413,6 @@ def login_screen():
             unsafe_allow_html=True,
         )
         with st.form("login_form", clear_on_submit=True):
-            # Style the input using class
             st.markdown('<div class="spar-login-input">', unsafe_allow_html=True)
             pw = st.text_input("Password", type="password", placeholder="Organisation password")
             st.markdown('</div>', unsafe_allow_html=True)
@@ -464,11 +463,11 @@ with title_col:
     st.markdown(
         f"""
         <div class="hero" style="text-align:center; border: none; background: transparent; padding: 10px 0;">
-            <div class="title">🏦 Bank Reconciliation <span style="color: {THEME['accent']};">with Chipo</span></div>
+            <div class="title">🏦 Bank Reconciliation <span style="color: {SPAR_GREEN};">with Chipo</span></div>
             <div class="subtitle">Welcome, Chipo! Upload your Bank Statement and Ledger to reconcile closing balances.</div>
             <div style="height: 8px;"></div>
             <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap;">
-                <div class="chip"><span class="chip-dot"></span> Secure session</div>
+                <div class="chip"><span class="chip-dot" style="background: {SPAR_GREEN};"></span> Secure session</div>
                 <div class="chip">Session {st.session_state.session_id}</div>
                 <div class="chip">Mode {DEPLOYMENT_MODE.title()}</div>
                 <div class="chip">Version {APP_VERSION}</div>
@@ -481,7 +480,7 @@ with title_col:
 st.markdown("")
 
 # =========================
-# Helper functions (reconciliation logic) – UNCHANGED
+# Helper functions – UNCHANGED (kept for completeness)
 # =========================
 def to_str(x):
     if pd.isna(x):
@@ -599,6 +598,7 @@ def detect_table(df_raw, max_rows=100):
     return df_raw, 0
 
 def load_bank_statement(file):
+    # (unchanged – keep as is)
     try:
         excel_file = pd.ExcelFile(file)
         sheet_names = excel_file.sheet_names
@@ -708,6 +708,7 @@ def load_bank_statement(file):
     return df_bank_norm, opening_balance, closing_balance, header_row_used
 
 def load_ledger(file):
+    # (unchanged)
     try:
         excel_file = pd.ExcelFile(file)
         sheet_names = excel_file.sheet_names
@@ -783,49 +784,39 @@ def load_ledger(file):
     return df_ledger_norm, closing_balance, header_row_used
 
 # =========================
-# Improved Matching Logic (UNCHANGED)
+# Matching, working paper, recon statement, export – UNCHANGED (kept as before)
 # =========================
 def match_transactions(bank_df, ledger_df):
+    # (unchanged – reuse the previous version)
     bank_copy = bank_df.copy()
     ledger_copy = ledger_df.copy()
-
     bank_credits = bank_copy[bank_copy['credit'] > 0].copy() if 'credit' in bank_copy.columns else bank_copy[bank_copy['amount'] > 0].copy()
     bank_debits = bank_copy[bank_copy['debit'] > 0].copy() if 'debit' in bank_copy.columns else bank_copy[bank_copy['amount'] < 0].copy()
     if 'credit' not in bank_copy.columns:
         bank_credits = bank_copy[bank_copy['amount'] > 0].copy()
         bank_debits = bank_copy[bank_copy['amount'] < 0].copy()
-
     ledger_credits = ledger_copy[ledger_copy['amount'] > 0].copy()
     ledger_debits = ledger_copy[ledger_copy['amount'] < 0].copy()
-
     bank_credits['abs_amount_rounded'] = bank_credits['abs_amount'].round(2)
     bank_debits['abs_amount_rounded'] = bank_debits['abs_amount'].round(2)
     ledger_credits['abs_amount_rounded'] = ledger_credits['abs_amount'].round(2)
     ledger_debits['abs_amount_rounded'] = ledger_debits['abs_amount'].round(2)
-
     for df in [bank_credits, bank_debits, ledger_credits, ledger_debits]:
         if not df.empty:
             df['date'] = pd.to_datetime(df['date'])
-
     bank_credits['id'] = [f'B_C_{i}' for i in range(len(bank_credits))]
     bank_debits['id'] = [f'B_D_{i}' for i in range(len(bank_debits))]
     ledger_credits['id'] = [f'L_C_{i}' for i in range(len(ledger_credits))]
     ledger_debits['id'] = [f'L_D_{i}' for i in range(len(ledger_debits))]
-
     matches = []
-
     def match_group(ledger_items, bank_items, txn_type):
         if ledger_items.empty or bank_items.empty:
             return [], [], []
-
         led_dict = ledger_items.to_dict('records')
         bank_dict = bank_items.to_dict('records')
-
         matched_ledger_ids = set()
         matched_bank_ids = set()
         group_matches = []
-
-        # First pass: amount + date
         for l_item in led_dict:
             if l_item['id'] in matched_ledger_ids:
                 continue
@@ -851,8 +842,6 @@ def match_transactions(bank_df, ledger_df):
                         matched_ledger_ids.add(l_item['id'])
                         matched_bank_ids.add(b_item['id'])
                         break
-
-        # Second pass: amount only
         for l_item in led_dict:
             if l_item['id'] in matched_ledger_ids:
                 continue
@@ -877,21 +866,12 @@ def match_transactions(bank_df, ledger_df):
                     matched_ledger_ids.add(l_item['id'])
                     matched_bank_ids.add(b_item['id'])
                     break
-
         unmatch_ledger = [item for item in led_dict if item['id'] not in matched_ledger_ids]
         unmatch_bank = [item for item in bank_dict if item['id'] not in matched_bank_ids]
-
         return group_matches, unmatch_ledger, unmatch_bank
-
-    credit_matches, unmatched_ledger_credits, unmatched_bank_credits = match_group(
-        ledger_credits, bank_credits, 'CREDIT'
-    )
-    debit_matches, unmatched_ledger_debits, unmatched_bank_debits = match_group(
-        ledger_debits, bank_debits, 'DEBIT'
-    )
-
+    credit_matches, unmatched_ledger_credits, unmatched_bank_credits = match_group(ledger_credits, bank_credits, 'CREDIT')
+    debit_matches, unmatched_ledger_debits, unmatched_bank_debits = match_group(ledger_debits, bank_debits, 'DEBIT')
     matches = credit_matches + debit_matches
-
     def clean_item(item):
         return {
             'date': item['date'],
@@ -902,7 +882,6 @@ def match_transactions(bank_df, ledger_df):
             'type': item.get('type', 'CREDIT' if item['amount'] > 0 else 'DEBIT'),
             'source': item.get('source', 'LEDGER' if 'id' in item and item['id'].startswith('L') else 'BANK')
         }
-
     return {
         'matches': matches,
         'unmatched_ledger_credits': [clean_item(x) for x in unmatched_ledger_credits],
@@ -911,9 +890,6 @@ def match_transactions(bank_df, ledger_df):
         'unmatched_bank_debits': [clean_item(x) for x in unmatched_bank_debits]
     }
 
-# =========================
-# Build Working Paper (UNCHANGED)
-# =========================
 def build_working_paper(match_results):
     rows = []
     for match in match_results['matches']:
@@ -959,13 +935,9 @@ def build_working_paper(match_results):
         })
     return pd.DataFrame(rows)
 
-# =========================
-# Build Reconciliation Statement (UPDATED to include bank_name)
-# =========================
 def build_recon_statement(bank_opening, bank_closing, ledger_closing, match_results, bank_name=""):
     recon_items = []
     total_adjustment = 0.0
-
     for item in match_results['unmatched_bank_credits']:
         amt = -abs(float(item['amount']))
         recon_items.append({
@@ -975,7 +947,6 @@ def build_recon_statement(bank_opening, bank_closing, ledger_closing, match_resu
             'category': 'Bank-only credit'
         })
         total_adjustment += amt
-
     for item in match_results['unmatched_bank_debits']:
         amt = abs(float(item['amount']))
         recon_items.append({
@@ -985,7 +956,6 @@ def build_recon_statement(bank_opening, bank_closing, ledger_closing, match_resu
             'category': 'Bank-only debit'
         })
         total_adjustment += amt
-
     for item in match_results['unmatched_ledger_credits']:
         amt = abs(float(item['amount']))
         recon_items.append({
@@ -995,7 +965,6 @@ def build_recon_statement(bank_opening, bank_closing, ledger_closing, match_resu
             'category': 'Ledger-only credit'
         })
         total_adjustment += amt
-
     for item in match_results['unmatched_ledger_debits']:
         amt = -abs(float(item['amount']))
         recon_items.append({
@@ -1005,15 +974,12 @@ def build_recon_statement(bank_opening, bank_closing, ledger_closing, match_resu
             'category': 'Ledger-only debit'
         })
         total_adjustment += amt
-
     bank_closing = float(bank_closing or 0)
     ledger_closing = float(ledger_closing or 0)
     adjusted_balance = bank_closing + total_adjustment
     difference = adjusted_balance - ledger_closing
-
     bank_movement = bank_closing - float(bank_opening or 0)
     ledger_movement = ledger_closing - float(bank_opening or 0)
-
     return {
         'bank_name': bank_name,
         'opening_balance': float(bank_opening or 0),
@@ -1028,14 +994,10 @@ def build_recon_statement(bank_opening, bank_closing, ledger_closing, match_resu
         'movement_difference': bank_movement - ledger_movement
     }
 
-# =========================
-# Export to Excel (with proper formatting) – UNCHANGED
-# =========================
 def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match_results):
+    # (unchanged – reuse previous version)
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-
-        # ---- Working Paper ----
         wp_display = working_paper_df.copy()
         wp_display['LEDGER_AMOUNT'] = wp_display['LEDGER_AMOUNT'].apply(
             lambda x: float(x) if pd.notna(x) and x != '' else None
@@ -1044,10 +1006,7 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
             lambda x: float(x) if pd.notna(x) and x != '' else None
         )
         wp_display.to_excel(writer, sheet_name='WORKING_PAPER', index=False)
-
-        # Apply formatting
         ws = writer.sheets['WORKING_PAPER']
-        # Date columns
         date_cols = []
         for col_idx, col_name in enumerate(wp_display.columns, 1):
             if col_name in ['LEDGER_DATE', 'BANK_DATE']:
@@ -1057,7 +1016,6 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
                 cell = ws[f"{col_letter}{row}"]
                 if cell.value and isinstance(cell.value, datetime):
                     cell.number_format = 'dd/mm/yy'
-        # Amount columns
         amount_cols = []
         for col_idx, col_name in enumerate(wp_display.columns, 1):
             if col_name in ['LEDGER_AMOUNT', 'BANK_AMOUNT']:
@@ -1074,8 +1032,6 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
                 if cell.value is not None:
                     max_len = max(max_len, len(str(cell.value)))
             ws.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 50)
-
-        # ---- Reconciliation Statement ----
         recon_data = [
             ['BANK RECONCILIATION STATEMENT', '', ''],
             ['', '', ''],
@@ -1087,14 +1043,12 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
             ['RECONCILING ITEMS', '', ''],
             ['Date', 'Description', 'Adjustment',],
         ]
-
         for _, item in recon_statement['recon_items'].iterrows():
             recon_data.append([
                 item['date'] if pd.notna(item['date']) else '',
                 item['description'][:120],
                 item['adjustment']
             ])
-
         recon_data += [
             ['', 'Total reconciling adjustments', recon_statement['total_adjustment']],
             ['', 'Adjusted bank balance', recon_statement['adjusted_balance']],
@@ -1114,8 +1068,6 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
         ]
         recon_df = pd.DataFrame(recon_data)
         recon_df.to_excel(writer, sheet_name='RECON_STATEMENT', index=False, header=False)
-
-        # Format numbers in recon statement
         ws_recon = writer.sheets['RECON_STATEMENT']
         for row in ws_recon.iter_rows(min_row=1, max_row=ws_recon.max_row, min_col=3, max_col=3):
             for cell in row:
@@ -1125,8 +1077,6 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
             for cell in row:
                 if isinstance(cell.value, datetime):
                     cell.number_format = 'dd/mm/yy'
-
-        # ---- Other sheets ----
         matched_detail = [['Matched Transactions - Detailed View'], ['']]
         matched_detail.append([
             'Ledger Date','Ledger Description','Ledger Ref','Ledger Amount',
@@ -1164,7 +1114,6 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
             for cell in row:
                 if isinstance(cell.value, (int, float)):
                     cell.number_format = '#,##0.00'
-
         uml = [['LEDGER TRANSACTIONS WITH NO BANK MATCH'], [''],
                ['Date','Description','Reference','Amount','Type']]
         for item in match_results['unmatched_ledger_credits']:
@@ -1184,7 +1133,6 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
             for cell in row:
                 if isinstance(cell.value, (int, float)):
                     cell.number_format = '#,##0.00'
-
         umb = [['BANK TRANSACTIONS WITH NO LEDGER MATCH'], [''],
                ['Date','Description','Reference','Amount','Type']]
         for item in match_results['unmatched_bank_credits']:
@@ -1204,7 +1152,6 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
             for cell in row:
                 if isinstance(cell.value, (int, float)):
                     cell.number_format = '#,##0.00'
-
         summary_data = [
             ['RECONCILIATION SUMMARY', ''],
             ['', ''],
@@ -1233,8 +1180,6 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
             for cell in row:
                 if isinstance(cell.value, (int, float)):
                     cell.number_format = '#,##0.00'
-
-        # Auto-width fallback
         for sheetname in writer.sheets:
             ws = writer.sheets[sheetname]
             for col in ws.columns:
@@ -1244,11 +1189,10 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
                     if cell.value is not None:
                         max_len = max(max_len, len(str(cell.value)))
                 ws.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 50)
-
     return output.getvalue()
 
 # =========================
-# AI Assistant Functions (UPDATED with Chipo persona)
+# AI Assistant (Chipo) – UNCHANGED
 # =========================
 def get_ai_context(match_results, recon_statement):
     context = "Here is the summary of the bank reconciliation:\n\n"
@@ -1262,7 +1206,6 @@ def get_ai_context(match_results, recon_statement):
     context += f"Unmatched ledger debits: {len(match_results['unmatched_ledger_debits'])}\n"
     context += f"Unmatched bank credits: {len(match_results['unmatched_bank_credits'])}\n"
     context += f"Unmatched bank debits: {len(match_results['unmatched_bank_debits'])}\n\n"
-
     context += "Sample unmatched ledger credits:\n"
     for item in match_results['unmatched_ledger_credits'][:3]:
         context += f"- {item['date'].strftime('%d/%m/%y')}: {item['description']} ({item['reference']}) Amount: {item['amount']:,.2f}\n"
@@ -1275,19 +1218,16 @@ def get_ai_context(match_results, recon_statement):
     context += "Sample unmatched bank debits:\n"
     for item in match_results['unmatched_bank_debits'][:3]:
         context += f"- {item['date'].strftime('%d/%m/%y')}: {item['description']} ({item['reference']}) Amount: {item['amount']:,.2f}\n"
-
     context += "\nMatching logic: first matches by absolute amount, then by exact date when multiple identical amounts exist."
     return context
 
 def get_ai_response(user_question, context, api_key):
-    """Get response from Groq (free) or fallback to rule-based, with Chipo persona."""
     system_prompt = (
         "You are Chipo, a friendly and intelligent assistant specialised in bank reconciliation. "
         "You help users understand their reconciliation results, explain differences, and suggest actions. "
         "You are warm, clear, and professional. Always respond in a helpful and encouraging tone.\n\n"
         "Use the following context to answer the user's questions:\n\n" + context
     )
-
     if api_key and GROQ_AVAILABLE:
         try:
             client = Groq(api_key=api_key)
@@ -1364,7 +1304,6 @@ def files_changed(bank_file, ledger_file):
     old_ledger = st.session_state.file_info.get("ledger")
     return (current_bank != old_bank) or (current_ledger != old_ledger)
 
-# ---- Bank Name Input ----
 st.markdown('<div class="card">', unsafe_allow_html=True)
 st.subheader("🏦 Bank Name")
 bank_name = st.text_input(
@@ -1375,7 +1314,6 @@ bank_name = st.text_input(
 st.session_state.bank_name = bank_name.strip()
 st.markdown('</div>', unsafe_allow_html=True)
 
-# ---- File Uploads ----
 col1, col2 = st.columns(2)
 with col1:
     st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -1407,7 +1345,6 @@ if bank_file and ledger_file:
         st.session_state.file_info["bank"] = (bank_file.name, bank_file.size)
         st.session_state.file_info["ledger"] = (ledger_file.name, ledger_file.size)
 
-# ---- Settings ----
 st.markdown('<div class="card">', unsafe_allow_html=True)
 st.subheader("⚙️ Reconciliation Settings")
 st.markdown("Enter the Bank Opening Balance below. If you leave it as 0, the app will try to auto-detect it from the bank statement.")
@@ -1421,7 +1358,6 @@ opening_balance_manual = st.number_input(
 st.session_state.opening_balance_manual = opening_balance_manual
 st.markdown('</div>', unsafe_allow_html=True)
 
-# ---- Buttons ----
 col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
 with col_btn1:
     run_recon = st.button("🔄 RUN RECONCILIATION", use_container_width=True)
@@ -1445,16 +1381,13 @@ with col_btn3:
                 key="download_last"
             )
 
-# ---- Run Reconciliation (with bank name validation) ----
 if run_recon:
     if not st.session_state.bank_name:
         st.error("⚠️ Please enter the Bank Name before running reconciliation.")
         st.stop()
-
     if not bank_file or not ledger_file:
         st.error("Please upload both Bank Statement and Ledger files")
         st.stop()
-
     with st.spinner("Processing..."):
         try:
             bank_df, bank_opening_auto, bank_closing_auto, _ = load_bank_statement(bank_file)
@@ -1470,8 +1403,6 @@ if run_recon:
                 bank_name=st.session_state.bank_name
             )
             output_bytes = export_to_excel(working_paper, recon_statement, bank_df, ledger_df, match_results)
-
-            # Save to session and file
             data_to_save = {
                 "output_bytes": output_bytes,
                 "output_filename": f"bank_reconciliation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
@@ -1479,10 +1410,9 @@ if run_recon:
                 "working_paper": working_paper,
                 "recon_statement": recon_statement,
                 "match_results": match_results,
-                "bank_name": st.session_state.bank_name,  # <-- store bank name
+                "bank_name": st.session_state.bank_name,
             }
             save_recon_data(data_to_save)
-
             st.session_state.bank_df = bank_df
             st.session_state.ledger_df = ledger_df
             st.session_state.match_results = match_results
@@ -1492,7 +1422,6 @@ if run_recon:
             st.session_state.output_filename = data_to_save["output_filename"]
             st.session_state.reconciliation_done = True
             st.session_state.chat_history = []
-
             st.success(f"✅ Reconciliation complete! {len(match_results['matches'])} transactions matched.")
             st.info("📁 Results saved. They will be available when you log in again.")
             safe_rerun()
@@ -1501,9 +1430,6 @@ if run_recon:
             import traceback
             st.code(traceback.format_exc())
 
-# =========================
-# Display results if they exist
-# =========================
 if st.session_state.reconciliation_done:
     st.markdown("---")
     st.info("💾 **Results from last reconciliation are shown below.** Upload new files and re-run to update.")
@@ -1572,9 +1498,6 @@ if st.session_state.reconciliation_done:
             "Review the unmatched transactions and opening balance difference before posting adjustments."
         )
 
-    # =========================
-    # AI Assistant Section
-    # =========================
     st.markdown("---")
     st.subheader("💬 Chipo – Your Centre of Intelligence")
     st.markdown("Welcome, Chipo is here to help you understand your reconciliation. Ask any question about the data, differences, or unmatched items.")
@@ -1598,7 +1521,6 @@ if st.session_state.reconciliation_done:
         st.session_state.chat_history.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
-
         with st.chat_message("assistant"):
             with st.spinner("Chipo is thinking..."):
                 context = get_ai_context(match_results, recon_statement)
