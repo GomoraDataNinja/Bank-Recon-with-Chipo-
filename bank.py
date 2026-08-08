@@ -12,22 +12,27 @@ extra_lib = os.path.join(os.getcwd(), 'extra_libs')
 os.makedirs(extra_lib, exist_ok=True)
 sys.path.insert(0, extra_lib)
 
+# Mapping: (import_name, package_name)
 required_packages = [
-    'streamlit', 'pandas', 'numpy', 'openpyxl',
-    'python-dateutil', 'xlrd'
+    ('streamlit', 'streamlit'),
+    ('pandas', 'pandas'),
+    ('numpy', 'numpy'),
+    ('openpyxl', 'openpyxl'),
+    ('dateutil', 'python-dateutil'),   # import name is 'dateutil'
+    ('xlrd', 'xlrd')
 ]
 
-for pkg in required_packages:
+for import_name, pkg_name in required_packages:
     try:
-        __import__(pkg)
+        __import__(import_name)
     except ImportError:
         subprocess.check_call([
             sys.executable, "-m", "pip", "install",
             "--target", extra_lib,
             "--no-cache-dir",
-            pkg
+            pkg_name
         ])
-        __import__(pkg)
+        __import__(import_name)
 
 # Now import everything normally
 import streamlit as st
