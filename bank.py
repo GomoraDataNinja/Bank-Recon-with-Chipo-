@@ -1,14 +1,32 @@
 import subprocess
 import sys
 import os
+import warnings
 
-# Force-install missing packages if not found
-required_packages = ['openpyxl', 'pandas', 'numpy', 'streamlit', 'python-dateutil', 'xlrd']
+# ==============================================
+# FORCE INSTALL MISSING DEPENDENCIES (failsafe)
+# ==============================================
+required_packages = [
+    'streamlit', 'pandas', 'numpy', 'openpyxl',
+    'python-dateutil', 'xlrd'
+]
+
 for pkg in required_packages:
     try:
         __import__(pkg)
     except ImportError:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
+        # Try with --user first (works on restricted environments)
+        try:
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", "--user", pkg]
+            )
+        except subprocess.CalledProcessError:
+            # Fallback: try without --user
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", pkg]
+            )
+        # Re-import after installation
+        __import__(pkg)
 
 # Now import everything normally
 import streamlit as st
@@ -18,13 +36,11 @@ import re
 import tempfile
 from datetime import datetime, date, timezone, timedelta
 from dateutil.parser import parse as dt_parse
-from openpyxl import load_workbook          # now it will be found
+from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter, column_index_from_string
 from copy import copy as pycopy
 import hashlib
 import time
-import os
-import warnings
 import io
 
 warnings.filterwarnings("ignore")
@@ -32,7 +48,7 @@ warnings.filterwarnings("ignore")
 # =========================
 # App config & security
 # =========================
-APP_VERSION = "3.0.0"
+APP_VERSION = "3.1.0"
 APP_NAME = "Bank Reconciliation"
 DEPLOYMENT_MODE = os.environ.get("DEPLOYMENT_MODE", "production")
 SESSION_TIMEOUT_MINUTES = 60
@@ -613,11 +629,10 @@ def load_ledger(file):
         trans_date = to_date(row[date_col]) if date_col and date_col in df_ledger.columns else pd.NaT
         if pd.isna(trans_date):
             continue
-        # Store the running balance if available
         if balance_col and balance_col in df_ledger.columns:
             running_balance = to_num(row[balance_col])
             if not pd.isna(running_balance):
-                closing_balance = running_balance  # update to latest non-NaN balance
+                closing_balance = running_balance
         transactions.append({
             'date': trans_date,
             'reference': to_str(row[ref_col]) if ref_col and ref_col in df_ledger.columns else '',
@@ -631,19 +646,18 @@ def load_ledger(file):
     if df_ledger_norm.empty:
         st.error("No valid ledger transactions.")
         st.stop()
-    # If a balance column was found, use the last non-null balance as closing balance.
-    # Otherwise fall back to the sum of amounts (net movement).
     if closing_balance is None:
         closing_balance = df_ledger_norm['amount'].sum() if not df_ledger_norm.empty else 0
     return df_ledger_norm, closing_balance, header_row_used
 
 # =========================
-# Improved Matching Logic
+# Optimised Matching Logic
 # =========================
 def match_transactions(bank_df, ledger_df):
     bank_copy = bank_df.copy()
     ledger_copy = ledger_df.copy()
 
+    # Separate credits and debits
     bank_credits = bank_copy[bank_copy['credit'] > 0].copy() if 'credit' in bank_copy.columns else bank_copy[bank_copy['amount'] > 0].copy()
     bank_debits = bank_copy[bank_copy['debit'] > 0].copy() if 'debit' in bank_copy.columns else bank_copy[bank_copy['amount'] < 0].copy()
     if 'credit' not in bank_copy.columns:
@@ -653,94 +667,97 @@ def match_transactions(bank_df, ledger_df):
     ledger_credits = ledger_copy[ledger_copy['amount'] > 0].copy()
     ledger_debits = ledger_copy[ledger_copy['amount'] < 0].copy()
 
-    bank_credits['abs_amount_rounded'] = bank_credits['abs_amount'].round(2)
-    bank_debits['abs_amount_rounded'] = bank_debits['abs_amount'].round(2)
-    ledger_credits['abs_amount_rounded'] = ledger_credits['abs_amount'].round(2)
-    ledger_debits['abs_amount_rounded'] = ledger_debits['abs_amount'].round(2)
-
+    # Round amounts
     for df in [bank_credits, bank_debits, ledger_credits, ledger_debits]:
         if not df.empty:
+            df['abs_amount_rounded'] = df['abs_amount'].round(2)
             df['date'] = pd.to_datetime(df['date'])
 
+    # Add IDs
     bank_credits['id'] = [f'B_C_{i}' for i in range(len(bank_credits))]
     bank_debits['id'] = [f'B_D_{i}' for i in range(len(bank_debits))]
     ledger_credits['id'] = [f'L_C_{i}' for i in range(len(ledger_credits))]
     ledger_debits['id'] = [f'L_D_{i}' for i in range(len(ledger_debits))]
 
-    matches = []
-
-    def match_group(ledger_items, bank_items, txn_type):
-        if ledger_items.empty or bank_items.empty:
+    def match_group(ledger_df, bank_df, txn_type):
+        if ledger_df.empty or bank_df.empty:
             return [], [], []
 
-        led_dict = ledger_items.to_dict('records')
-        bank_dict = bank_items.to_dict('records')
+        # Merge by rounded amount and date (first pass: amount + date)
+        merged_date = pd.merge(
+            ledger_df[['id', 'date', 'abs_amount_rounded', 'description', 'reference']],
+            bank_df[['id', 'date', 'abs_amount_rounded', 'description', 'reference']],
+            on=['abs_amount_rounded', 'date'],
+            how='inner',
+            suffixes=('_ledger', '_bank')
+        )
+        matched_pairs = []
+        used_ledger = set()
+        used_bank = set()
 
-        matched_ledger_ids = set()
-        matched_bank_ids = set()
-        group_matches = []
+        for _, row in merged_date.iterrows():
+            l_id = row['id_ledger']
+            b_id = row['id_bank']
+            if l_id not in used_ledger and b_id not in used_bank:
+                matched_pairs.append({
+                    'ledger_id': l_id,
+                    'bank_id': b_id,
+                    'amount': row['abs_amount_rounded'],
+                    'type': txn_type,
+                    'match_method': 'amount_and_date',
+                    'ledger_date': row['date'],
+                    'bank_date': row['date'],
+                    'date_match': True,
+                    'ledger_desc': row['description_ledger'],
+                    'ledger_ref': row['reference_ledger'],
+                    'bank_desc': row['description_bank'],
+                    'bank_ref': row['reference_bank']
+                })
+                used_ledger.add(l_id)
+                used_bank.add(b_id)
 
-        # First pass: amount + date
-        for l_item in led_dict:
-            if l_item['id'] in matched_ledger_ids:
-                continue
-            for b_item in bank_dict:
-                if b_item['id'] in matched_bank_ids:
-                    continue
-                if abs(l_item['abs_amount_rounded'] - b_item['abs_amount_rounded']) <= 0.01:
-                    if l_item['date'].date() == b_item['date'].date():
-                        group_matches.append({
-                            'ledger_id': l_item['id'],
-                            'bank_id': b_item['id'],
-                            'amount': l_item['abs_amount_rounded'],
-                            'type': txn_type,
-                            'match_method': 'amount_and_date',
-                            'ledger_date': l_item['date'],
-                            'bank_date': b_item['date'],
-                            'date_match': True,
-                            'ledger_desc': l_item.get('description', ''),
-                            'ledger_ref': l_item.get('reference', ''),
-                            'bank_desc': b_item.get('description', ''),
-                            'bank_ref': b_item.get('reference', '')
-                        })
-                        matched_ledger_ids.add(l_item['id'])
-                        matched_bank_ids.add(b_item['id'])
-                        break
+        # Second pass: amount only (for remaining)
+        leftover_ledger = ledger_df[~ledger_df['id'].isin(used_ledger)]
+        leftover_bank = bank_df[~bank_df['id'].isin(used_bank)]
 
-        # Second pass: amount only
-        for l_item in led_dict:
-            if l_item['id'] in matched_ledger_ids:
-                continue
-            for b_item in bank_dict:
-                if b_item['id'] in matched_bank_ids:
-                    continue
-                if abs(l_item['abs_amount_rounded'] - b_item['abs_amount_rounded']) <= 0.01:
-                    group_matches.append({
-                        'ledger_id': l_item['id'],
-                        'bank_id': b_item['id'],
-                        'amount': l_item['abs_amount_rounded'],
-                        'type': txn_type,
-                        'match_method': 'amount_only',
-                        'ledger_date': l_item['date'],
-                        'bank_date': b_item['date'],
-                        'date_match': False,
-                        'ledger_desc': l_item.get('description', ''),
-                        'ledger_ref': l_item.get('reference', ''),
-                        'bank_desc': b_item.get('description', ''),
-                        'bank_ref': b_item.get('reference', '')
-                    })
-                    matched_ledger_ids.add(l_item['id'])
-                    matched_bank_ids.add(b_item['id'])
-                    break
+        merged_amount = pd.merge(
+            leftover_ledger[['id', 'date', 'abs_amount_rounded', 'description', 'reference']],
+            leftover_bank[['id', 'date', 'abs_amount_rounded', 'description', 'reference']],
+            on='abs_amount_rounded',
+            how='inner',
+            suffixes=('_ledger', '_bank')
+        )
+        for _, row in merged_amount.iterrows():
+            l_id = row['id_ledger']
+            b_id = row['id_bank']
+            if l_id not in used_ledger and b_id not in used_bank:
+                matched_pairs.append({
+                    'ledger_id': l_id,
+                    'bank_id': b_id,
+                    'amount': row['abs_amount_rounded'],
+                    'type': txn_type,
+                    'match_method': 'amount_only',
+                    'ledger_date': row['date_ledger'],
+                    'bank_date': row['date_bank'],
+                    'date_match': False,
+                    'ledger_desc': row['description_ledger'],
+                    'ledger_ref': row['reference_ledger'],
+                    'bank_desc': row['description_bank'],
+                    'bank_ref': row['reference_bank']
+                })
+                used_ledger.add(l_id)
+                used_bank.add(b_id)
 
-        unmatch_ledger = [item for item in led_dict if item['id'] not in matched_ledger_ids]
-        unmatch_bank = [item for item in bank_dict if item['id'] not in matched_bank_ids]
+        unmatch_ledger = leftover_ledger[~leftover_ledger['id'].isin(used_ledger)].to_dict('records')
+        unmatch_bank = leftover_bank[~leftover_bank['id'].isin(used_bank)].to_dict('records')
 
-        return group_matches, unmatch_ledger, unmatch_bank
+        return matched_pairs, unmatch_ledger, unmatch_bank
 
+    # Match credits
     credit_matches, unmatched_ledger_credits, unmatched_bank_credits = match_group(
         ledger_credits, bank_credits, 'CREDIT'
     )
+    # Match debits
     debit_matches, unmatched_ledger_debits, unmatched_bank_debits = match_group(
         ledger_debits, bank_debits, 'DEBIT'
     )
@@ -1011,7 +1028,7 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
     return output.getvalue()
 
 # =========================
-# Main UI – with personalized header
+# Main UI
 # =========================
 st.markdown(
     f"""
@@ -1106,20 +1123,36 @@ if run_recon:
     if not bank_file or not ledger_file:
         st.error("Please upload both Bank Statement and Ledger files")
         st.stop()
-    with st.spinner("Processing..."):
-        try:
+
+    status = st.status("🔄 Processing reconciliation...", expanded=True)
+
+    try:
+        with status:
+            status.write("📂 Loading bank statement...")
             bank_df, bank_opening_auto, bank_closing_auto, _ = load_bank_statement(bank_file)
+
+            status.write("📂 Loading ledger...")
             ledger_df, ledger_closing, _ = load_ledger(ledger_file)
+
             opening_balance = st.session_state.opening_balance_manual if st.session_state.opening_balance_manual != 0 else (bank_opening_auto or 0)
+
+            status.write("🔍 Matching transactions...")
             match_results = match_transactions(bank_df, ledger_df)
+
+            status.write("📄 Building working paper...")
             working_paper = build_working_paper(match_results)
+
+            status.write("📊 Building reconciliation statement...")
             recon_statement = build_recon_statement(
                 opening_balance,
                 bank_closing_auto,
                 ledger_closing,
                 match_results
             )
+
+            status.write("💾 Generating Excel file...")
             output_bytes = export_to_excel(working_paper, recon_statement, bank_df, ledger_df, match_results)
+
             st.session_state.bank_df = bank_df
             st.session_state.ledger_df = ledger_df
             st.session_state.match_results = match_results
@@ -1128,12 +1161,16 @@ if run_recon:
             st.session_state.output_bytes = output_bytes
             st.session_state.output_filename = f"bank_reconciliation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             st.session_state.reconciliation_done = True
+
+            status.update(label="✅ Reconciliation complete!", state="complete")
             st.success(f"✅ Reconciliation complete! {len(match_results['matches'])} transactions matched.")
             safe_rerun()
-        except Exception as e:
-            st.error(f"Error: {e}")
-            import traceback
-            st.code(traceback.format_exc())
+
+    except Exception as e:
+        status.update(label="❌ Error", state="error")
+        st.error(f"Error: {e}")
+        import traceback
+        st.code(traceback.format_exc())
 
 if st.session_state.reconciliation_done:
     st.markdown("---")
