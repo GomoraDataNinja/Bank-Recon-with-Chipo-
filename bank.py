@@ -28,7 +28,7 @@ warnings.filterwarnings("ignore")
 # =========================
 # App config & security
 # =========================
-APP_VERSION = "3.2.1"
+APP_VERSION = "3.2.2"
 APP_NAME = "Bank Reconciliation"
 DEPLOYMENT_MODE = os.environ.get("DEPLOYMENT_MODE", "production")
 SESSION_TIMEOUT_MINUTES = 60
@@ -61,7 +61,7 @@ def get_org_password():
 ORG_PASSWORD = get_org_password()
 
 # =========================
-# Theme (Wells Fargo red accent)
+# Theme (Wells Fargo red accent) – kept for main app, but login uses SPAR colors
 # =========================
 THEME = {
     "bg": "#ffffff",
@@ -77,6 +77,11 @@ THEME = {
     "bad": "#d11a2a",
     "neutral": "#6b7280",
 }
+
+# SPAR brand colors
+SPAR_RED = "#EC1B24"
+SPAR_GREEN = "#157946"
+SPAR_WHITE = "#FFFFFF"
 
 def apply_style():
     st.markdown(
@@ -219,17 +224,51 @@ def apply_style():
             color: var(--accent) !important;
             font-weight: 750 !important;
         }}
-        /* SPAR logo badge - made larger */
+        /* SPAR logo badge */
         .spar-badge {{
             display: inline-block;
-            background: var(--accent);
-            color: white;
+            background: {SPAR_RED};
+            color: {SPAR_WHITE};
             font-weight: 900;
             font-size: 24px;
             padding: 12px 24px;
             border-radius: 30px;
             letter-spacing: 3px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }}
+        /* SPAR login styling */
+        .spar-login-card {{
+            background: {SPAR_WHITE} !important;
+            border: 2px solid {SPAR_RED} !important;
+            border-radius: 24px !important;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.10) !important;
+        }}
+        .spar-login-title {{
+            font-size: 32px !important;
+            font-weight: 900 !important;
+            color: {SPAR_RED} !important;
+            letter-spacing: 1px !important;
+        }}
+        .spar-login-sub {{
+            font-size: 14px !important;
+            color: {SPAR_GREEN} !important;
+            font-weight: 600 !important;
+        }}
+        .spar-login-btn > button {{
+            background: {SPAR_RED} !important;
+            border: 1px solid {SPAR_RED} !important;
+            color: {SPAR_WHITE} !important;
+            font-weight: 800 !important;
+            border-radius: 30px !important;
+            padding: 0.8rem 1.5rem !important;
+        }}
+        .spar-login-btn > button:hover {{
+            background: {SPAR_GREEN} !important;
+            border-color: {SPAR_GREEN} !important;
+        }}
+        .spar-login-input > div > div {{
+            border-radius: 30px !important;
+            border: 2px solid {SPAR_RED} !important;
         }}
         </style>
         """,
@@ -270,7 +309,7 @@ def clear_recon_data():
         return False
 
 # =========================
-# Session management (authentication)
+# Session management (authentication) – FIXED LOGOUT
 # =========================
 def touch():
     st.session_state.last_activity = datetime.now()
@@ -282,8 +321,10 @@ def is_timed_out():
     return (datetime.now() - last).total_seconds() > SESSION_TIMEOUT_MINUTES * 60
 
 def logout():
+    # Set authenticated to False and clear everything except session_id and last_activity
+    st.session_state.authenticated = False
     for k in list(st.session_state.keys()):
-        if k not in ["authenticated", "session_id", "last_activity"]:
+        if k not in ["session_id", "last_activity"]:
             del st.session_state[k]
     safe_rerun()
 
@@ -329,7 +370,6 @@ if not st.session_state.reconciliation_done:
         st.session_state.working_paper = saved.get("working_paper")
         st.session_state.recon_statement = saved.get("recon_statement")
         st.session_state.match_results = saved.get("match_results")
-        # Also restore bank_name if present
         if "bank_name" in saved:
             st.session_state.bank_name = saved["bank_name"]
 
@@ -345,26 +385,41 @@ def clear_reconciliation_state():
     st.session_state.file_info = {"bank": None, "ledger": None}
     st.session_state.chat_history = []
 
+# =========================
+# SPAR-branded login screen
+# =========================
 def login_screen():
-    st.markdown('<div style="height: 1.8rem;"></div>', unsafe_allow_html=True)
-    c1, c2, c3 = st.columns([1, 1.25, 1])
+    st.markdown('<div style="height: 2rem;"></div>', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([1, 1.2, 1])
     with c2:
+        # SPAR logo and title inside a card with SPAR colors
         st.markdown(
             f"""
-            <div class="card" style="margin-top: 10vh;">
-                <div class="title" style="text-align:center;">{APP_NAME}</div>
-                <div class="subtitle" style="text-align:center;">Sign in to continue.</div>
+            <div class="card spar-login-card" style="margin-top: 2vh; padding: 30px 30px !important; text-align:center;">
+                <div style="display:flex; justify-content:center; align-items:center; gap:12px; margin-bottom:10px;">
+                    <div class="spar-badge" style="font-size:28px; padding:10px 28px;">SPAR</div>
+                </div>
+                <div class="spar-login-title">{APP_NAME}</div>
+                <div class="spar-login-sub">Sign in to continue.</div>
                 <div style="height: 14px;"></div>
                 <div style="display:flex; justify-content:center;">
-                    <div class="chip"><span class="chip-dot"></span> Version {APP_VERSION} • {DEPLOYMENT_MODE.title()}</div>
+                    <div class="chip" style="border-color: {SPAR_RED};">
+                        <span class="chip-dot" style="background: {SPAR_RED};"></span>
+                        Version {APP_VERSION} • {DEPLOYMENT_MODE.title()}
+                    </div>
                 </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
         with st.form("login_form", clear_on_submit=True):
+            # Style the input using class
+            st.markdown('<div class="spar-login-input">', unsafe_allow_html=True)
             pw = st.text_input("Password", type="password", placeholder="Organisation password")
+            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown('<div class="spar-login-btn">', unsafe_allow_html=True)
             ok = st.form_submit_button("Sign in", use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
         if ok:
             if pw == ORG_PASSWORD:
                 st.session_state.authenticated = True
@@ -384,6 +439,9 @@ def login_screen():
             else:
                 st.error("Wrong password.")
 
+# =========================
+# Authentication check
+# =========================
 if st.session_state.authenticated and is_timed_out():
     st.session_state.authenticated = False
     st.warning("Session timed out. Sign in again.")
@@ -423,7 +481,7 @@ with title_col:
 st.markdown("")
 
 # =========================
-# Helper functions (reconciliation logic) – UNCHANGED (but kept for completeness)
+# Helper functions (reconciliation logic) – UNCHANGED
 # =========================
 def to_str(x):
     if pd.isna(x):
@@ -971,7 +1029,7 @@ def build_recon_statement(bank_opening, bank_closing, ledger_closing, match_resu
     }
 
 # =========================
-# Export to Excel (with proper formatting)
+# Export to Excel (with proper formatting) – UNCHANGED
 # =========================
 def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match_results):
     output = io.BytesIO()
