@@ -28,7 +28,7 @@ warnings.filterwarnings("ignore")
 # =========================
 # App config & security
 # =========================
-APP_VERSION = "3.2.3"
+APP_VERSION = "3.2.4"
 APP_NAME = "Bank Reconciliation"
 DEPLOYMENT_MODE = os.environ.get("DEPLOYMENT_MODE", "production")
 SESSION_TIMEOUT_MINUTES = 60
@@ -238,22 +238,22 @@ def apply_style():
             box-shadow: 0 2px 8px rgba(0,0,0,0.15);
             border: 3px solid {SPAR_GREEN};
         }}
-        /* SPAR login styling */
+        /* === LOGIN PAGE – GREEN DOMINANT === */
         .spar-login-card {{
             background: {SPAR_WHITE} !important;
-            border: 3px solid {SPAR_RED} !important;
+            border: 3px solid {SPAR_GREEN} !important;
             border-radius: 24px !important;
             box-shadow: 0 12px 40px rgba(0,0,0,0.10) !important;
         }}
         .spar-login-title {{
             font-size: 32px !important;
             font-weight: 900 !important;
-            color: {SPAR_RED} !important;
+            color: {SPAR_GREEN} !important;
             letter-spacing: 1px !important;
         }}
         .spar-login-sub {{
             font-size: 14px !important;
-            color: {SPAR_GREEN} !important;
+            color: {SPAR_RED} !important;
             font-weight: 600 !important;
         }}
         .spar-login-btn > button {{
@@ -270,7 +270,7 @@ def apply_style():
         }}
         .spar-login-input > div > div {{
             border-radius: 30px !important;
-            border: 2px solid {SPAR_RED} !important;
+            border: 2px solid {SPAR_GREEN} !important;
         }}
         </style>
         """,
@@ -387,7 +387,7 @@ def clear_reconciliation_state():
     st.session_state.chat_history = []
 
 # =========================
-# SPAR-branded login screen
+# SPAR-branded login screen – GREEN DOMINANT
 # =========================
 def login_screen():
     st.markdown('<div style="height: 2rem;"></div>', unsafe_allow_html=True)
@@ -403,8 +403,8 @@ def login_screen():
                 <div class="spar-login-sub">Sign in to continue.</div>
                 <div style="height: 14px;"></div>
                 <div style="display:flex; justify-content:center;">
-                    <div class="chip" style="border-color: {SPAR_RED};">
-                        <span class="chip-dot" style="background: {SPAR_RED};"></span>
+                    <div class="chip" style="border-color: {SPAR_GREEN};">
+                        <span class="chip-dot" style="background: {SPAR_GREEN};"></span>
                         Version {APP_VERSION} • {DEPLOYMENT_MODE.title()}
                     </div>
                 </div>
