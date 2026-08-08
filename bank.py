@@ -1,3 +1,16 @@
+import subprocess
+import sys
+import os
+
+# Force-install missing packages if not found
+required_packages = ['openpyxl', 'pandas', 'numpy', 'streamlit', 'python-dateutil', 'xlrd']
+for pkg in required_packages:
+    try:
+        __import__(pkg)
+    except ImportError:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
+
+# Now import everything normally
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -5,7 +18,7 @@ import re
 import tempfile
 from datetime import datetime, date, timezone, timedelta
 from dateutil.parser import parse as dt_parse
-from openpyxl import load_workbook
+from openpyxl import load_workbook          # now it will be found
 from openpyxl.utils import get_column_letter, column_index_from_string
 from copy import copy as pycopy
 import hashlib
