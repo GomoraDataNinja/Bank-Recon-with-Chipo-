@@ -3,6 +3,21 @@ import sys
 import os
 import site
 import warnings
+import io
+import pickle
+import re
+import tempfile
+import hashlib
+import time
+from datetime import datetime, date, timezone, timedelta
+from copy import copy as pycopy
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter, column_index_from_string
+from openpyxl.styles import numbers
+import pandas as pd
+import numpy as np
+import streamlit as st
+from dateutil.parser import parse as dt_parse
 
 # ==============================================
 # FORCE INSTALL MISSING DEPENDENCIES (failsafe)
@@ -33,30 +48,13 @@ for import_name, pkg_name in required_packages:
         ])
         __import__(import_name)
 
-# Now import everything normally
-import streamlit as st
-import pandas as pd
-import numpy as np
-import re
-import tempfile
-from datetime import datetime, date, timezone, timedelta
-from dateutil.parser import parse as dt_parse
-from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter, column_index_from_string
-from openpyxl.styles import numbers
-from copy import copy as pycopy
-import hashlib
-import time
-import io
-import pickle
-
 warnings.filterwarnings("ignore")
 
 # =========================
 # App config & security
 # =========================
-APP_VERSION = "3.2.4"
-APP_NAME = "Bank Reconciliation"
+APP_VERSION = "3.3.0"
+APP_NAME = "Bank & Supplier Reconciliation"
 DEPLOYMENT_MODE = os.environ.get("DEPLOYMENT_MODE", "production")
 SESSION_TIMEOUT_MINUTES = 60
 
@@ -336,7 +334,7 @@ def clear_recon_data():
         return False
 
 # =========================
-# Session management (authentication) – FIXED LOGOUT
+# Session management (authentication)
 # =========================
 def touch():
     st.session_state.last_activity = datetime.now()
@@ -412,7 +410,7 @@ def clear_reconciliation_state():
     st.session_state.chat_history = []
 
 # =========================
-# SPAR-branded login screen – GREEN DOMINANT
+# SPAR-branded login screen
 # =========================
 def login_screen():
     st.markdown('<div style="height: 2rem;"></div>', unsafe_allow_html=True)
@@ -488,8 +486,8 @@ with title_col:
     st.markdown(
         f"""
         <div class="hero" style="text-align:center; border: none; background: transparent; padding: 10px 0;">
-            <div class="title">🏦 Bank Reconciliation <span style="color: {SPAR_GREEN};">with Chipo</span></div>
-            <div class="subtitle">Welcome, Chipo! Upload your Bank Statement and Ledger to reconcile closing balances.</div>
+            <div class="title">🏦 {APP_NAME} <span style="color: {SPAR_GREEN};">with Chipo</span></div>
+            <div class="subtitle">Welcome, Chipo! One app for Bank and Supplier reconciliation.</div>
             <div style="height: 8px;"></div>
             <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap;">
                 <div class="chip"><span class="chip-dot" style="background: {SPAR_GREEN};"></span> Secure session</div>
@@ -505,7 +503,7 @@ with title_col:
 st.markdown("")
 
 # =========================
-# Helper functions – UNCHANGED
+# Helper functions (Bank Recon)
 # =========================
 def to_str(x):
     if pd.isna(x):
@@ -806,50 +804,36 @@ def load_ledger(file):
         closing_balance = df_ledger_norm['amount'].sum() if not df_ledger_norm.empty else 0
     return df_ledger_norm, closing_balance, header_row_used
 
-# =========================
-# Improved Matching Logic (UNCHANGED)
-# =========================
-def match_transactions(bank_df, ledger_df):
+def match_transactions_bank(bank_df, ledger_df):
     bank_copy = bank_df.copy()
     ledger_copy = ledger_df.copy()
-
     bank_credits = bank_copy[bank_copy['credit'] > 0].copy() if 'credit' in bank_copy.columns else bank_copy[bank_copy['amount'] > 0].copy()
     bank_debits = bank_copy[bank_copy['debit'] > 0].copy() if 'debit' in bank_copy.columns else bank_copy[bank_copy['amount'] < 0].copy()
     if 'credit' not in bank_copy.columns:
         bank_credits = bank_copy[bank_copy['amount'] > 0].copy()
         bank_debits = bank_copy[bank_copy['amount'] < 0].copy()
-
     ledger_credits = ledger_copy[ledger_copy['amount'] > 0].copy()
     ledger_debits = ledger_copy[ledger_copy['amount'] < 0].copy()
-
     bank_credits['abs_amount_rounded'] = bank_credits['abs_amount'].round(2)
     bank_debits['abs_amount_rounded'] = bank_debits['abs_amount'].round(2)
     ledger_credits['abs_amount_rounded'] = ledger_credits['abs_amount'].round(2)
     ledger_debits['abs_amount_rounded'] = ledger_debits['abs_amount'].round(2)
-
     for df in [bank_credits, bank_debits, ledger_credits, ledger_debits]:
         if not df.empty:
             df['date'] = pd.to_datetime(df['date'])
-
     bank_credits['id'] = [f'B_C_{i}' for i in range(len(bank_credits))]
     bank_debits['id'] = [f'B_D_{i}' for i in range(len(bank_debits))]
     ledger_credits['id'] = [f'L_C_{i}' for i in range(len(ledger_credits))]
     ledger_debits['id'] = [f'L_D_{i}' for i in range(len(ledger_debits))]
-
     matches = []
-
     def match_group(ledger_items, bank_items, txn_type):
         if ledger_items.empty or bank_items.empty:
             return [], [], []
-
         led_dict = ledger_items.to_dict('records')
         bank_dict = bank_items.to_dict('records')
-
         matched_ledger_ids = set()
         matched_bank_ids = set()
         group_matches = []
-
-        # First pass: amount + date
         for l_item in led_dict:
             if l_item['id'] in matched_ledger_ids:
                 continue
@@ -875,8 +859,6 @@ def match_transactions(bank_df, ledger_df):
                         matched_ledger_ids.add(l_item['id'])
                         matched_bank_ids.add(b_item['id'])
                         break
-
-        # Second pass: amount only
         for l_item in led_dict:
             if l_item['id'] in matched_ledger_ids:
                 continue
@@ -901,21 +883,12 @@ def match_transactions(bank_df, ledger_df):
                     matched_ledger_ids.add(l_item['id'])
                     matched_bank_ids.add(b_item['id'])
                     break
-
         unmatch_ledger = [item for item in led_dict if item['id'] not in matched_ledger_ids]
         unmatch_bank = [item for item in bank_dict if item['id'] not in matched_bank_ids]
-
         return group_matches, unmatch_ledger, unmatch_bank
-
-    credit_matches, unmatched_ledger_credits, unmatched_bank_credits = match_group(
-        ledger_credits, bank_credits, 'CREDIT'
-    )
-    debit_matches, unmatched_ledger_debits, unmatched_bank_debits = match_group(
-        ledger_debits, bank_debits, 'DEBIT'
-    )
-
+    credit_matches, unmatched_ledger_credits, unmatched_bank_credits = match_group(ledger_credits, bank_credits, 'CREDIT')
+    debit_matches, unmatched_ledger_debits, unmatched_bank_debits = match_group(ledger_debits, bank_debits, 'DEBIT')
     matches = credit_matches + debit_matches
-
     def clean_item(item):
         return {
             'date': item['date'],
@@ -926,7 +899,6 @@ def match_transactions(bank_df, ledger_df):
             'type': item.get('type', 'CREDIT' if item['amount'] > 0 else 'DEBIT'),
             'source': item.get('source', 'LEDGER' if 'id' in item and item['id'].startswith('L') else 'BANK')
         }
-
     return {
         'matches': matches,
         'unmatched_ledger_credits': [clean_item(x) for x in unmatched_ledger_credits],
@@ -935,10 +907,7 @@ def match_transactions(bank_df, ledger_df):
         'unmatched_bank_debits': [clean_item(x) for x in unmatched_bank_debits]
     }
 
-# =========================
-# Build Working Paper (UNCHANGED)
-# =========================
-def build_working_paper(match_results):
+def build_working_paper_bank(match_results):
     rows = []
     for match in match_results['matches']:
         rows.append({
@@ -983,13 +952,9 @@ def build_working_paper(match_results):
         })
     return pd.DataFrame(rows)
 
-# =========================
-# Build Reconciliation Statement (UPDATED to include bank_name)
-# =========================
 def build_recon_statement(bank_opening, bank_closing, ledger_closing, match_results, bank_name=""):
     recon_items = []
     total_adjustment = 0.0
-
     for item in match_results['unmatched_bank_credits']:
         amt = -abs(float(item['amount']))
         recon_items.append({
@@ -999,7 +964,6 @@ def build_recon_statement(bank_opening, bank_closing, ledger_closing, match_resu
             'category': 'Bank-only credit'
         })
         total_adjustment += amt
-
     for item in match_results['unmatched_bank_debits']:
         amt = abs(float(item['amount']))
         recon_items.append({
@@ -1009,7 +973,6 @@ def build_recon_statement(bank_opening, bank_closing, ledger_closing, match_resu
             'category': 'Bank-only debit'
         })
         total_adjustment += amt
-
     for item in match_results['unmatched_ledger_credits']:
         amt = abs(float(item['amount']))
         recon_items.append({
@@ -1019,7 +982,6 @@ def build_recon_statement(bank_opening, bank_closing, ledger_closing, match_resu
             'category': 'Ledger-only credit'
         })
         total_adjustment += amt
-
     for item in match_results['unmatched_ledger_debits']:
         amt = -abs(float(item['amount']))
         recon_items.append({
@@ -1029,15 +991,12 @@ def build_recon_statement(bank_opening, bank_closing, ledger_closing, match_resu
             'category': 'Ledger-only debit'
         })
         total_adjustment += amt
-
     bank_closing = float(bank_closing or 0)
     ledger_closing = float(ledger_closing or 0)
     adjusted_balance = bank_closing + total_adjustment
     difference = adjusted_balance - ledger_closing
-
     bank_movement = bank_closing - float(bank_opening or 0)
     ledger_movement = ledger_closing - float(bank_opening or 0)
-
     return {
         'bank_name': bank_name,
         'opening_balance': float(bank_opening or 0),
@@ -1052,14 +1011,9 @@ def build_recon_statement(bank_opening, bank_closing, ledger_closing, match_resu
         'movement_difference': bank_movement - ledger_movement
     }
 
-# =========================
-# Export to Excel (with proper formatting) – UNCHANGED
-# =========================
-def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match_results):
+def export_to_excel_bank(working_paper_df, recon_statement, bank_df, ledger_df, match_results):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-
-        # ---- Working Paper ----
         wp_display = working_paper_df.copy()
         wp_display['LEDGER_AMOUNT'] = wp_display['LEDGER_AMOUNT'].apply(
             lambda x: float(x) if pd.notna(x) and x != '' else None
@@ -1068,10 +1022,7 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
             lambda x: float(x) if pd.notna(x) and x != '' else None
         )
         wp_display.to_excel(writer, sheet_name='WORKING_PAPER', index=False)
-
-        # Apply formatting
         ws = writer.sheets['WORKING_PAPER']
-        # Date columns
         date_cols = []
         for col_idx, col_name in enumerate(wp_display.columns, 1):
             if col_name in ['LEDGER_DATE', 'BANK_DATE']:
@@ -1081,7 +1032,6 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
                 cell = ws[f"{col_letter}{row}"]
                 if cell.value and isinstance(cell.value, datetime):
                     cell.number_format = 'dd/mm/yy'
-        # Amount columns
         amount_cols = []
         for col_idx, col_name in enumerate(wp_display.columns, 1):
             if col_name in ['LEDGER_AMOUNT', 'BANK_AMOUNT']:
@@ -1098,8 +1048,6 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
                 if cell.value is not None:
                     max_len = max(max_len, len(str(cell.value)))
             ws.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 50)
-
-        # ---- Reconciliation Statement ----
         recon_data = [
             ['BANK RECONCILIATION STATEMENT', '', ''],
             ['', '', ''],
@@ -1111,14 +1059,12 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
             ['RECONCILING ITEMS', '', ''],
             ['Date', 'Description', 'Adjustment',],
         ]
-
         for _, item in recon_statement['recon_items'].iterrows():
             recon_data.append([
                 item['date'] if pd.notna(item['date']) else '',
                 item['description'][:120],
                 item['adjustment']
             ])
-
         recon_data += [
             ['', 'Total reconciling adjustments', recon_statement['total_adjustment']],
             ['', 'Adjusted bank balance', recon_statement['adjusted_balance']],
@@ -1138,8 +1084,6 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
         ]
         recon_df = pd.DataFrame(recon_data)
         recon_df.to_excel(writer, sheet_name='RECON_STATEMENT', index=False, header=False)
-
-        # Format numbers in recon statement
         ws_recon = writer.sheets['RECON_STATEMENT']
         for row in ws_recon.iter_rows(min_row=1, max_row=ws_recon.max_row, min_col=3, max_col=3):
             for cell in row:
@@ -1149,8 +1093,6 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
             for cell in row:
                 if isinstance(cell.value, datetime):
                     cell.number_format = 'dd/mm/yy'
-
-        # ---- Other sheets ----
         matched_detail = [['Matched Transactions - Detailed View'], ['']]
         matched_detail.append([
             'Ledger Date','Ledger Description','Ledger Ref','Ledger Amount',
@@ -1188,7 +1130,6 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
             for cell in row:
                 if isinstance(cell.value, (int, float)):
                     cell.number_format = '#,##0.00'
-
         uml = [['LEDGER TRANSACTIONS WITH NO BANK MATCH'], [''],
                ['Date','Description','Reference','Amount','Type']]
         for item in match_results['unmatched_ledger_credits']:
@@ -1208,7 +1149,6 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
             for cell in row:
                 if isinstance(cell.value, (int, float)):
                     cell.number_format = '#,##0.00'
-
         umb = [['BANK TRANSACTIONS WITH NO LEDGER MATCH'], [''],
                ['Date','Description','Reference','Amount','Type']]
         for item in match_results['unmatched_bank_credits']:
@@ -1228,7 +1168,6 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
             for cell in row:
                 if isinstance(cell.value, (int, float)):
                     cell.number_format = '#,##0.00'
-
         summary_data = [
             ['RECONCILIATION SUMMARY', ''],
             ['', ''],
@@ -1257,8 +1196,6 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
             for cell in row:
                 if isinstance(cell.value, (int, float)):
                     cell.number_format = '#,##0.00'
-
-        # Auto-width fallback
         for sheetname in writer.sheets:
             ws = writer.sheets[sheetname]
             for col in ws.columns:
@@ -1268,11 +1205,10 @@ def export_to_excel(working_paper_df, recon_statement, bank_df, ledger_df, match
                     if cell.value is not None:
                         max_len = max(max_len, len(str(cell.value)))
                 ws.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 50)
-
     return output.getvalue()
 
 # =========================
-# AI Assistant Functions (UPDATED with Chipo persona)
+# AI Assistant (Bank) – keep as is
 # =========================
 def get_ai_context(match_results, recon_statement):
     context = "Here is the summary of the bank reconciliation:\n\n"
@@ -1286,7 +1222,6 @@ def get_ai_context(match_results, recon_statement):
     context += f"Unmatched ledger debits: {len(match_results['unmatched_ledger_debits'])}\n"
     context += f"Unmatched bank credits: {len(match_results['unmatched_bank_credits'])}\n"
     context += f"Unmatched bank debits: {len(match_results['unmatched_bank_debits'])}\n\n"
-
     context += "Sample unmatched ledger credits:\n"
     for item in match_results['unmatched_ledger_credits'][:3]:
         context += f"- {item['date'].strftime('%d/%m/%y')}: {item['description']} ({item['reference']}) Amount: {item['amount']:,.2f}\n"
@@ -1299,19 +1234,16 @@ def get_ai_context(match_results, recon_statement):
     context += "Sample unmatched bank debits:\n"
     for item in match_results['unmatched_bank_debits'][:3]:
         context += f"- {item['date'].strftime('%d/%m/%y')}: {item['description']} ({item['reference']}) Amount: {item['amount']:,.2f}\n"
-
     context += "\nMatching logic: first matches by absolute amount, then by exact date when multiple identical amounts exist."
     return context
 
 def get_ai_response(user_question, context, api_key):
-    """Get response from Groq (free) or fallback to rule-based, with Chipo persona."""
     system_prompt = (
         "You are Chipo, a friendly and intelligent assistant specialised in bank reconciliation. "
         "You help users understand their reconciliation results, explain differences, and suggest actions. "
         "You are warm, clear, and professional. Always respond in a helpful and encouraging tone.\n\n"
         "Use the following context to answer the user's questions:\n\n" + context
     )
-
     if api_key and GROQ_AVAILABLE:
         try:
             client = Groq(api_key=api_key)
@@ -1379,274 +1311,698 @@ def get_rule_based_response(user_question, context):
                 "If you provide more details, I can give a more specific answer. I'm here to make your reconciliation easy!")
 
 # =========================
-# Main UI
+# Supplier Reconciliation Engine (Fully AI-like)
 # =========================
-def files_changed(bank_file, ledger_file):
-    current_bank = (bank_file.name, bank_file.size) if bank_file else None
-    current_ledger = (ledger_file.name, ledger_file.size) if ledger_file else None
-    old_bank = st.session_state.file_info.get("bank")
-    old_ledger = st.session_state.file_info.get("ledger")
-    return (current_bank != old_bank) or (current_ledger != old_ledger)
+def detect_header_row_supplier(df_raw, max_scan=80):
+    best_score = -1
+    best_row = 0
+    for r in range(min(max_scan, len(df_raw))):
+        row = df_raw.iloc[r]
+        non_empty = row.notna().sum()
+        if non_empty < 2:
+            continue
+        header_like = 0
+        for v in row:
+            if pd.isna(v):
+                continue
+            s = str(v).strip()
+            if len(s) > 1 and re.search(r'[A-Za-z]', s):
+                header_like += 1
+        row_lower = ' '.join([str(v).lower() for v in row if pd.notna(v)])
+        keywords = ['date', 'amount', 'description', 'reference', 'invoice', 'document', 'posting', 'balance', 'due', 'entry']
+        keyword_score = sum(3 for kw in keywords if kw in row_lower)
+        score = non_empty + header_like * 2 + keyword_score
+        if score > best_score:
+            best_score = score
+            best_row = r
+    return best_row
 
-st.markdown('<div class="card">', unsafe_allow_html=True)
-st.subheader("🏦 Bank Name")
-bank_name = st.text_input(
-    "Enter the name of the bank to reconcile (e.g., CBZ, CABS, NEDBANK)",
-    value=st.session_state.bank_name,
-    placeholder="e.g., CBZ Bank – USD"
-)
-st.session_state.bank_name = bank_name.strip()
-st.markdown('</div>', unsafe_allow_html=True)
+def clean_headers_supplier(headers):
+    clean = []
+    seen = {}
+    for h in headers:
+        h = str(h).strip()
+        if not h:
+            h = "Column"
+        h = re.sub(r'[^a-zA-Z0-9_ ]', '_', h)
+        h = re.sub(r'\s+', '_', h)
+        if h in seen:
+            seen[h] += 1
+            h = f"{h}_{seen[h]}"
+        else:
+            seen[h] = 0
+        clean.append(h)
+    return clean
 
-col1, col2 = st.columns(2)
-with col1:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("📄 Bank Statement")
-    bank_file = st.file_uploader(
-        "Bank Statement (Excel file)",
-        type=["xlsx", "xls"],
-        help="Upload your bank statement Excel file. Required columns: Date, Credit, Debit, Description (or similar).",
-        key="bank"
-    )
-    st.caption("Accepts .xlsx or .xls, max 200MB per file")
-    st.markdown('</div>', unsafe_allow_html=True)
+def extract_table_supplier(df_raw, header_row):
+    headers = df_raw.iloc[header_row].fillna('').astype(str).tolist()
+    headers = clean_headers_supplier(headers)
+    data = df_raw.iloc[header_row + 1:].reset_index(drop=True)
+    if data.shape[1] < len(headers):
+        for _ in range(len(headers) - data.shape[1]):
+            data[f"extra_{_}"] = None
+    elif data.shape[1] > len(headers):
+        data = data.iloc[:, :len(headers)]
+    data.columns = headers
+    data = data.dropna(how='all')
+    return data, headers
 
-with col2:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("📒 Cashbook / Ledger")
-    ledger_file = st.file_uploader(
-        "Ledger / Cashbook (Excel file)",
-        type=["xlsx", "xls"],
-        help="Upload your Yellowcob ledger Excel file. Required columns: Date, Amount, Description (or similar).",
-        key="ledger"
-    )
-    st.caption("Accepts .xlsx or .xls, max 200MB per file")
-    st.markdown('</div>', unsafe_allow_html=True)
+def infer_roles_supplier(df):
+    cols = df.columns.tolist()
+    roles = {}
+    def score_col(role, keywords, sample_size=100):
+        best_col = None
+        best_score = -1
+        for col in cols:
+            sample = df[col].dropna().head(sample_size).astype(str)
+            if len(sample) == 0:
+                continue
+            col_lower = col.lower()
+            name_score = 2 if any(kw in col_lower for kw in keywords) else 0
+            if role == 'date':
+                date_like = sum(1 for v in sample if is_date_like_supplier(v)) / len(sample)
+                data_score = date_like * 10
+            elif role == 'amount':
+                num_like = sum(1 for v in sample if is_number_like_supplier(v)) / len(sample)
+                data_score = num_like * 10
+            elif role == 'reference':
+                mixed_ratio = sum(1 for v in sample if re.search(r'[A-Za-z/-]', v)) / len(sample)
+                data_score = mixed_ratio * 8
+            elif role == 'description':
+                avg_len = sample.str.len().mean()
+                data_score = min(avg_len / 20, 2) * 5
+            else:
+                data_score = 0
+            score = name_score + data_score
+            if score > best_score:
+                best_score = score
+                best_col = col
+        return best_col
 
-if bank_file and ledger_file:
-    if files_changed(bank_file, ledger_file):
-        clear_reconciliation_state()
-        st.session_state.file_info["bank"] = (bank_file.name, bank_file.size)
-        st.session_state.file_info["ledger"] = (ledger_file.name, ledger_file.size)
+    roles['date'] = score_col('date', ['date', 'posting', 'doc date', 'entry date', 'transaction date'])
+    roles['amount'] = score_col('amount', ['amount', 'amt', 'value', 'total', 'net', 'lcy', 'balance'])
+    roles['reference'] = score_col('reference', ['reference', 'doc', 'document', 'invoice', 'inv', 'order', 'po', 'external', 'number'])
+    roles['description'] = score_col('description', ['description', 'desc', 'particulars', 'details', 'narration', 'text'])
+    if not roles['amount']:
+        for col in cols:
+            if df[col].apply(is_number_like_supplier).mean() > 0.5:
+                roles['amount'] = col
+                break
+    if not roles['date']:
+        for col in cols:
+            if df[col].apply(is_date_like_supplier).mean() > 0.3:
+                roles['date'] = col
+                break
+    return roles
 
-st.markdown('<div class="card">', unsafe_allow_html=True)
-st.subheader("⚙️ Reconciliation Settings")
-st.markdown("Enter the Bank Opening Balance below. If you leave it as 0, the app will try to auto-detect it from the bank statement.")
-opening_balance_manual = st.number_input(
-    "Bank Opening Balance (manual override)",
-    value=st.session_state.opening_balance_manual,
-    step=100.00,
-    format="%.2f",
-    key="opening_balance_input"
-)
-st.session_state.opening_balance_manual = opening_balance_manual
-st.markdown('</div>', unsafe_allow_html=True)
-
-col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
-with col_btn1:
-    run_recon = st.button("🔄 RUN RECONCILIATION", use_container_width=True)
-with col_btn2:
-    if st.button("🗑️ Clear Results", use_container_width=True):
-        clear_reconciliation_state()
-        clear_recon_data()
-        st.session_state.file_info = {"bank": None, "ledger": None}
-        st.session_state.chat_history = []
-        st.session_state.bank_name = ""
-        safe_rerun()
-with col_btn3:
-    if st.button("📥 Download Last Report", use_container_width=True, disabled=(st.session_state.output_bytes is None)):
-        if st.session_state.output_bytes:
-            st.download_button(
-                label="Download",
-                data=st.session_state.output_bytes,
-                file_name=st.session_state.output_filename or "bank_reconciliation.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                key="download_last"
-            )
-
-if run_recon:
-    if not st.session_state.bank_name:
-        st.error("⚠️ Please enter the Bank Name before running reconciliation.")
-        st.stop()
-    if not bank_file or not ledger_file:
-        st.error("Please upload both Bank Statement and Ledger files")
-        st.stop()
-    with st.spinner("Processing..."):
-        try:
-            bank_df, bank_opening_auto, bank_closing_auto, _ = load_bank_statement(bank_file)
-            ledger_df, ledger_closing, _ = load_ledger(ledger_file)
-            opening_balance = st.session_state.opening_balance_manual if st.session_state.opening_balance_manual != 0 else (bank_opening_auto or 0)
-            match_results = match_transactions(bank_df, ledger_df)
-            working_paper = build_working_paper(match_results)
-            recon_statement = build_recon_statement(
-                opening_balance,
-                bank_closing_auto,
-                ledger_closing,
-                match_results,
-                bank_name=st.session_state.bank_name
-            )
-            output_bytes = export_to_excel(working_paper, recon_statement, bank_df, ledger_df, match_results)
-            data_to_save = {
-                "output_bytes": output_bytes,
-                "output_filename": f"bank_reconciliation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                "match_count": len(match_results['matches']),
-                "working_paper": working_paper,
-                "recon_statement": recon_statement,
-                "match_results": match_results,
-                "bank_name": st.session_state.bank_name,
-            }
-            save_recon_data(data_to_save)
-            st.session_state.bank_df = bank_df
-            st.session_state.ledger_df = ledger_df
-            st.session_state.match_results = match_results
-            st.session_state.working_paper = working_paper
-            st.session_state.recon_statement = recon_statement
-            st.session_state.output_bytes = output_bytes
-            st.session_state.output_filename = data_to_save["output_filename"]
-            st.session_state.reconciliation_done = True
-            st.session_state.chat_history = []
-            st.success(f"✅ Reconciliation complete! {len(match_results['matches'])} transactions matched.")
-            st.info("📁 Results saved. They will be available when you log in again.")
-            safe_rerun()
-        except Exception as e:
-            st.error(f"Error: {e}")
-            import traceback
-            st.code(traceback.format_exc())
-
-if st.session_state.reconciliation_done:
-    st.markdown("---")
-    st.info("💾 **Results from last reconciliation are shown below.** Upload new files and re-run to update.")
-    match_results = st.session_state.match_results
-    working_paper = st.session_state.working_paper
-    recon_statement = st.session_state.recon_statement
-
-    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-    with metric_col1:
-        st.metric("Matched Transactions", len(match_results['matches']))
-    with metric_col2:
-        st.metric("Unmatched - Ledger", len(match_results['unmatched_ledger_credits']) + len(match_results['unmatched_ledger_debits']))
-    with metric_col3:
-        st.metric("Unmatched - Bank", len(match_results['unmatched_bank_credits']) + len(match_results['unmatched_bank_debits']))
-    with metric_col4:
-        diff = recon_statement['difference']
-        st.metric("Balance Difference", f"{diff:,.2f}", delta="Zero" if abs(diff) < 0.01 else "Check")
-
-    st.markdown("---")
-    st.subheader("📋 Working Paper Preview")
-    display_cols = ['SECTION', 'LEDGER_DATE', 'LEDGER_DESC', 'LEDGER_REF', 'LEDGER_AMOUNT', 
-                    'MATCH_STATUS', 'BANK_AMOUNT', 'BANK_DATE', 'BANK_REF', 'BANK_DESC']
-    wp_preview = working_paper[display_cols].head(30).copy()
-    wp_preview['LEDGER_DATE'] = wp_preview['LEDGER_DATE'].apply(lambda x: format_date(x) if pd.notna(x) else '')
-    wp_preview['BANK_DATE'] = wp_preview['BANK_DATE'].apply(lambda x: format_date(x) if pd.notna(x) else '')
-    wp_preview['LEDGER_AMOUNT'] = wp_preview['LEDGER_AMOUNT'].apply(lambda x: f"{float(x):,.2f}" if pd.notna(x) and x != '' else '')
-    wp_preview['BANK_AMOUNT'] = wp_preview['BANK_AMOUNT'].apply(lambda x: f"{float(x):,.2f}" if pd.notna(x) and x != '' else '')
-    st.dataframe(wp_preview, use_container_width=True)
-
-    st.markdown("---")
-    st.subheader("📄 Clean Bank Reconciliation")
-    bank_display_name = recon_statement.get('bank_name', '') or st.session_state.bank_name or 'Unknown Bank'
-    recon_preview = [
-        {"Reconciliation Step": f"Bank: {bank_display_name}", "Amount": ""},
-        {"Reconciliation Step": "Opening Bank Balance", "Amount": f"{recon_statement['opening_balance']:,.2f}"},
-        {"Reconciliation Step": "Closing Balance per Bank Statement", "Amount": f"{recon_statement['bank_closing_balance']:,.2f}"},
-    ]
-    for _, item in recon_statement['recon_items'].iterrows():
-        recon_preview.append({
-            "Reconciliation Step": item['description'],
-            "Amount": f"{item['adjustment']:,.2f}"
-        })
-    recon_preview += [
-        {"Reconciliation Step": "TOTAL RECONCILING ADJUSTMENTS", "Amount": f"{recon_statement['total_adjustment']:,.2f}"},
-        {"Reconciliation Step": "ADJUSTED BANK BALANCE", "Amount": f"{recon_statement['adjusted_balance']:,.2f}"},
-        {"Reconciliation Step": "LEDGER CLOSING BALANCE", "Amount": f"{recon_statement['ledger_balance']:,.2f}"},
-        {"Reconciliation Step": "UNRECONCILED DIFFERENCE", "Amount": f"{recon_statement['difference']:,.2f}"},
-    ]
-    st.dataframe(pd.DataFrame(recon_preview), use_container_width=True)
-
-    st.subheader("🔎 Why the Difference Exists")
-    diagnostic = pd.DataFrame([
-        {"Diagnostic": "Opening Bank Balance", "Amount": recon_statement['opening_balance']},
-        {"Diagnostic": "Bank Movement During Period", "Amount": recon_statement['bank_movement']},
-        {"Diagnostic": "Ledger Movement Using Same Opening Basis", "Amount": recon_statement['ledger_movement']},
-        {"Diagnostic": "Movement Difference", "Amount": recon_statement['movement_difference']},
-        {"Diagnostic": "Final Unreconciled Difference", "Amount": recon_statement['difference']},
-    ])
-    st.dataframe(diagnostic, use_container_width=True)
-
-    if abs(recon_statement['difference']) < 0.01:
-        st.success("✅ Reconciled: the adjusted bank balance agrees to the ledger.")
-    else:
-        st.warning(
-            "⚠️ Investigation required. The system is deliberately not forcing the balance to zero. "
-            "Review the unmatched transactions and opening balance difference before posting adjustments."
-        )
-
-    st.markdown("---")
-    st.subheader("💬 Chipo – Your Centre of Intelligence")
-    st.markdown("Welcome, Chipo is here to help you understand your reconciliation. Ask any question about the data, differences, or unmatched items.")
-
-    api_key = None
+def is_date_like_supplier(s):
     try:
-        api_key = st.secrets.get("GROQ_API_KEY", None) if hasattr(st, "secrets") else None
+        dt_parse(str(s), fuzzy=True)
+        return True
     except:
-        pass
+        return False
 
-    if not api_key:
-        st.info("ℹ️ No Groq API key found. Using rule‑based assistant (limited). Get a free key at console.groq.com")
+def is_number_like_supplier(s):
+    try:
+        float(re.sub(r'[^\d.\-]', '', str(s)))
+        return True
+    except:
+        return False
+
+def parse_amount_supplier(x):
+    try:
+        s = str(x).replace(',', '').strip()
+        if '(' in s and ')' in s:
+            s = '-' + re.sub(r'[()]', '', s)
+        s = re.sub(r'[^\d.\-]', '', s)
+        if s == '' or s == '-':
+            return np.nan
+        return float(s)
+    except:
+        return np.nan
+
+def parse_date_supplier(x):
+    try:
+        return pd.to_datetime(x, errors='coerce')
+    except:
+        return pd.NaT
+
+def normalize_transactions_supplier(df, roles):
+    date_col = roles.get('date')
+    amount_col = roles.get('amount')
+    ref_col = roles.get('reference')
+    desc_col = roles.get('description')
+
+    if not date_col or not amount_col:
+        return pd.DataFrame()
+
+    df_clean = df.copy()
+    df_clean['_amount'] = df_clean[amount_col].apply(parse_amount_supplier)
+    df_clean['_date'] = df_clean[date_col].apply(parse_date_supplier)
+    df_clean = df_clean[df_clean['_date'].notna() & df_clean['_amount'].notna()]
+
+    if df_clean.empty:
+        return pd.DataFrame()
+
+    if ref_col:
+        df_clean['_ref'] = df_clean[ref_col].astype(str).str.strip()
     else:
-        st.success("✅ AI enabled using Groq (free)")
+        df_clean['_ref'] = ''
 
-    for msg in st.session_state.chat_history:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+    if desc_col:
+        df_clean['_desc'] = df_clean[desc_col].astype(str).str.strip()
+    else:
+        df_clean['_desc'] = ''
 
-    if prompt := st.chat_input("Ask Chipo about the reconciliation..."):
-        st.session_state.chat_history.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-        with st.chat_message("assistant"):
-            with st.spinner("Chipo is thinking..."):
+    summary_keywords = ['total', 'balance', 'opening', 'closing', 'summary', 'subtotal']
+    mask = ~(df_clean['_ref'].str.len() == 0) | ~(df_clean['_desc'].str.lower().str.contains('|'.join(summary_keywords)))
+    df_clean = df_clean[mask]
+
+    result = pd.DataFrame({
+        'date': df_clean['_date'],
+        'amount': df_clean['_amount'],
+        'reference': df_clean['_ref'],
+        'description': df_clean['_desc'],
+    })
+    return result
+
+def match_transactions_supplier(supplier_df, ledger_df, tolerance=0.01):
+    sup = supplier_df.copy()
+    led = ledger_df.copy()
+    sup['abs_amount'] = sup['amount'].abs().round(2)
+    led['abs_amount'] = led['amount'].abs().round(2)
+    sup['date'] = pd.to_datetime(sup['date'])
+    led['date'] = pd.to_datetime(led['date'])
+    sup['row_id'] = [f'S_{i}' for i in range(len(sup))]
+    led['row_id'] = [f'L_{i}' for i in range(len(led))]
+
+    matches = []
+    used_sup = set()
+    used_led = set()
+
+    all_amounts = set(sup['abs_amount'].unique()).union(set(led['abs_amount'].unique()))
+    for amt in sorted(all_amounts):
+        sup_group = sup[sup['abs_amount'] == amt]
+        led_group = led[led['abs_amount'] == amt]
+        if sup_group.empty or led_group.empty:
+            continue
+
+        sup_list = sup_group.to_dict('records')
+        led_list = led_group.to_dict('records')
+        for s in sup_list:
+            if s['row_id'] in used_sup:
+                continue
+            matched = None
+            for l in led_list:
+                if l['row_id'] in used_led:
+                    continue
+                if s['date'].date() == l['date'].date():
+                    matched = l
+                    break
+            if matched:
+                matches.append({
+                    'supplier_id': s['row_id'],
+                    'ledger_id': matched['row_id'],
+                    'amount': amt,
+                    'supplier_date': s['date'],
+                    'ledger_date': matched['date'],
+                    'supplier_ref': s['reference'],
+                    'ledger_ref': matched['reference'],
+                    'supplier_desc': s['description'],
+                    'ledger_desc': matched['description'],
+                    'match_method': 'amount_and_date',
+                })
+                used_sup.add(s['row_id'])
+                used_led.add(matched['row_id'])
+            else:
+                pass
+
+        sup_remaining = sup_group[~sup_group['row_id'].isin(used_sup)]
+        led_remaining = led_group[~led_group['row_id'].isin(used_led)]
+        for s in sup_remaining.to_dict('records'):
+            if s['row_id'] in used_sup:
+                continue
+            for l in led_remaining.to_dict('records'):
+                if l['row_id'] in used_led:
+                    continue
+                matches.append({
+                    'supplier_id': s['row_id'],
+                    'ledger_id': l['row_id'],
+                    'amount': amt,
+                    'supplier_date': s['date'],
+                    'ledger_date': l['date'],
+                    'supplier_ref': s['reference'],
+                    'ledger_ref': l['reference'],
+                    'supplier_desc': s['description'],
+                    'ledger_desc': l['description'],
+                    'match_method': 'amount_only',
+                })
+                used_sup.add(s['row_id'])
+                used_led.add(l['row_id'])
+                break
+
+    unmatched_sup = sup[~sup['row_id'].isin(used_sup)].to_dict('records')
+    unmatched_led = led[~led['row_id'].isin(used_led)].to_dict('records')
+
+    return {
+        'matches': matches,
+        'unmatched_supplier': unmatched_sup,
+        'unmatched_ledger': unmatched_led,
+    }
+
+def format_date_supplier(dt):
+    if pd.isna(dt):
+        return ''
+    return dt.strftime('%d/%m/%y')
+
+def build_working_paper_supplier(match_results):
+    rows = []
+    for m in match_results['matches']:
+        rows.append({
+            'SECTION': 'MATCHED',
+            'SUPPLIER_DATE': format_date_supplier(m['supplier_date']),
+            'SUPPLIER_REF': m['supplier_ref'],
+            'SUPPLIER_DESC': m['supplier_desc'],
+            'SUPPLIER_AMOUNT': m['amount'],
+            'MATCH_METHOD': m['match_method'],
+            'LEDGER_DATE': format_date_supplier(m['ledger_date']),
+            'LEDGER_REF': m['ledger_ref'],
+            'LEDGER_DESC': m['ledger_desc'],
+            'LEDGER_AMOUNT': m['amount'],
+        })
+    for item in match_results['unmatched_supplier']:
+        rows.append({
+            'SECTION': 'UNMATCHED - SUPPLIER ONLY',
+            'SUPPLIER_DATE': format_date_supplier(item['date']),
+            'SUPPLIER_REF': item['reference'],
+            'SUPPLIER_DESC': item['description'],
+            'SUPPLIER_AMOUNT': item['amount'],
+            'MATCH_METHOD': 'NO LEDGER MATCH',
+            'LEDGER_DATE': '',
+            'LEDGER_REF': '',
+            'LEDGER_DESC': '',
+            'LEDGER_AMOUNT': '',
+        })
+    for item in match_results['unmatched_ledger']:
+        rows.append({
+            'SECTION': 'UNMATCHED - LEDGER ONLY',
+            'SUPPLIER_DATE': '',
+            'SUPPLIER_REF': '',
+            'SUPPLIER_DESC': '',
+            'SUPPLIER_AMOUNT': '',
+            'MATCH_METHOD': 'NO SUPPLIER MATCH',
+            'LEDGER_DATE': format_date_supplier(item['date']),
+            'LEDGER_REF': item['reference'],
+            'LEDGER_DESC': item['description'],
+            'LEDGER_AMOUNT': item['amount'],
+        })
+    return pd.DataFrame(rows)
+
+def reconcile_supplier(supplier_file, ledger_file, tolerance=0.01):
+    try:
+        sup_raw = pd.read_excel(supplier_file, header=None)
+        led_raw = pd.read_excel(ledger_file, header=None)
+    except Exception as e:
+        raise ValueError(f"Could not read files: {e}")
+
+    sup_header = detect_header_row_supplier(sup_raw)
+    led_header = detect_header_row_supplier(led_raw)
+
+    sup_df, _ = extract_table_supplier(sup_raw, sup_header)
+    led_df, _ = extract_table_supplier(led_raw, led_header)
+
+    if sup_df.empty or led_df.empty:
+        return None, "No data found after table extraction."
+
+    sup_roles = infer_roles_supplier(sup_df)
+    led_roles = infer_roles_supplier(led_df)
+
+    sup_norm = normalize_transactions_supplier(sup_df, sup_roles)
+    led_norm = normalize_transactions_supplier(led_df, led_roles)
+
+    if sup_norm.empty or led_norm.empty:
+        return None, "No valid transactions found after cleaning."
+
+    match_results = match_transactions_supplier(sup_norm, led_norm, tolerance)
+
+    working_paper = build_working_paper_supplier(match_results)
+
+    summary = {
+        'total_supplier': len(sup_norm),
+        'total_ledger': len(led_norm),
+        'matched': len(match_results['matches']),
+        'unmatched_supplier': len(match_results['unmatched_supplier']),
+        'unmatched_ledger': len(match_results['unmatched_ledger']),
+    }
+
+    return {
+        'working_paper': working_paper,
+        'match_results': match_results,
+        'summary': summary,
+        'used_columns': {'supplier': sup_roles, 'ledger': led_roles},
+    }, None
+
+def export_to_excel_supplier(working_paper_df, match_results):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        working_paper_df.to_excel(writer, sheet_name='WORKING_PAPER', index=False)
+        # Summary
+        summary = pd.DataFrame([
+            ['Matched', len(match_results['matches'])],
+            ['Unmatched Supplier', len(match_results['unmatched_supplier'])],
+            ['Unmatched Ledger', len(match_results['unmatched_ledger'])],
+        ], columns=['Item', 'Count'])
+        summary.to_excel(writer, sheet_name='SUMMARY', index=False)
+        # Auto-width
+        for sheetname in writer.sheets:
+            ws = writer.sheets[sheetname]
+            for col in ws.columns:
+                max_len = 0
+                col_letter = get_column_letter(col[0].column)
+                for cell in col:
+                    if cell.value is not None:
+                        max_len = max(max_len, len(str(cell.value)))
+                ws.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 50)
+    return output.getvalue()
+
+# =========================
+# MAIN UI – Tabs
+# =========================
+tab_bank, tab_supplier = st.tabs(["🏦 Bank Reconciliation", "🔄 Supplier Reconciliation"])
+
+with tab_bank:
+    st.markdown(
+        """
+        <div class="hero" style="text-align:center; border: none; background: transparent; padding: 10px 0;">
+            <div class="title">🏦 Bank Reconciliation</div>
+            <div class="subtitle">Upload Bank Statement and Ledger to reconcile closing balances.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Bank Name input
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("🏦 Bank Name")
+    bank_name = st.text_input(
+        "Enter the name of the bank to reconcile (e.g., CBZ, CABS, NEDBANK)",
+        value=st.session_state.bank_name,
+        placeholder="e.g., CBZ Bank – USD"
+    )
+    st.session_state.bank_name = bank_name.strip()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        bank_file = st.file_uploader(
+            "Bank Statement (Excel file)",
+            type=["xlsx", "xls"],
+            help="Upload your bank statement Excel file.",
+            key="bank_file"
+        )
+        st.caption("Accepts .xlsx or .xls")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col2:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        ledger_file = st.file_uploader(
+            "Cashbook / Ledger (Excel file)",
+            type=["xlsx", "xls"],
+            help="Upload your Yellowcob ledger Excel file.",
+            key="ledger_file"
+        )
+        st.caption("Accepts .xlsx or .xls")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("⚙️ Reconciliation Settings")
+    opening_balance_manual = st.number_input(
+        "Bank Opening Balance (manual override, 0 = auto-detect)",
+        value=st.session_state.opening_balance_manual,
+        step=100.00,
+        format="%.2f",
+        key="bank_opening_input"
+    )
+    st.session_state.opening_balance_manual = opening_balance_manual
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    col_btn1, col_btn2, col_btn3 = st.columns([1,1,1])
+    with col_btn1:
+        run_bank_recon = st.button("🔄 RUN BANK RECONCILIATION", use_container_width=True, key="run_bank_recon")
+    with col_btn2:
+        if st.button("🗑️ Clear Results", use_container_width=True, key="clear_bank"):
+            clear_reconciliation_state()
+            clear_recon_data()
+            st.session_state.file_info = {"bank": None, "ledger": None}
+            st.session_state.chat_history = []
+            st.session_state.bank_name = ""
+            safe_rerun()
+    with col_btn3:
+        if st.button("📥 Download Last Report", use_container_width=True, disabled=(st.session_state.output_bytes is None), key="download_bank_last"):
+            if st.session_state.output_bytes:
+                st.download_button(
+                    label="Download",
+                    data=st.session_state.output_bytes,
+                    file_name=st.session_state.output_filename or "bank_reconciliation.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="download_bank_last_btn"
+                )
+
+    if run_bank_recon:
+        if not st.session_state.bank_name:
+            st.error("⚠️ Please enter the Bank Name before running reconciliation.")
+            st.stop()
+        if not bank_file or not ledger_file:
+            st.error("Please upload both Bank Statement and Ledger files")
+            st.stop()
+        with st.spinner("Processing..."):
+            try:
+                bank_df, bank_opening_auto, bank_closing_auto, _ = load_bank_statement(bank_file)
+                ledger_df, ledger_closing, _ = load_ledger(ledger_file)
+                opening_balance = st.session_state.opening_balance_manual if st.session_state.opening_balance_manual != 0 else (bank_opening_auto or 0)
+                match_results = match_transactions_bank(bank_df, ledger_df)
+                working_paper = build_working_paper_bank(match_results)
+                recon_statement = build_recon_statement(
+                    opening_balance,
+                    bank_closing_auto,
+                    ledger_closing,
+                    match_results,
+                    bank_name=st.session_state.bank_name
+                )
+                output_bytes = export_to_excel_bank(working_paper, recon_statement, bank_df, ledger_df, match_results)
+                data_to_save = {
+                    "output_bytes": output_bytes,
+                    "output_filename": f"bank_reconciliation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    "match_count": len(match_results['matches']),
+                    "working_paper": working_paper,
+                    "recon_statement": recon_statement,
+                    "match_results": match_results,
+                    "bank_name": st.session_state.bank_name,
+                }
+                save_recon_data(data_to_save)
+                st.session_state.bank_df = bank_df
+                st.session_state.ledger_df = ledger_df
+                st.session_state.match_results = match_results
+                st.session_state.working_paper = working_paper
+                st.session_state.recon_statement = recon_statement
+                st.session_state.output_bytes = output_bytes
+                st.session_state.output_filename = data_to_save["output_filename"]
+                st.session_state.reconciliation_done = True
+                st.session_state.chat_history = []
+                st.success(f"✅ Bank Reconciliation complete! {len(match_results['matches'])} transactions matched.")
+                st.info("📁 Results saved.")
+                safe_rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+                import traceback
+                st.code(traceback.format_exc())
+
+    if st.session_state.reconciliation_done:
+        st.markdown("---")
+        st.info("💾 **Results from last bank reconciliation are shown below.**")
+        match_results = st.session_state.match_results
+        working_paper = st.session_state.working_paper
+        recon_statement = st.session_state.recon_statement
+
+        metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+        with metric_col1:
+            st.metric("Matched", len(match_results['matches']))
+        with metric_col2:
+            st.metric("Unmatched Ledger", len(match_results['unmatched_ledger_credits']) + len(match_results['unmatched_ledger_debits']))
+        with metric_col3:
+            st.metric("Unmatched Bank", len(match_results['unmatched_bank_credits']) + len(match_results['unmatched_bank_debits']))
+        with metric_col4:
+            diff = recon_statement['difference']
+            st.metric("Difference", f"{diff:,.2f}", delta="Zero" if abs(diff) < 0.01 else "Check")
+
+        st.markdown("---")
+        st.subheader("📋 Working Paper Preview")
+        display_cols = ['SECTION', 'LEDGER_DATE', 'LEDGER_DESC', 'LEDGER_REF', 'LEDGER_AMOUNT', 
+                        'MATCH_STATUS', 'BANK_AMOUNT', 'BANK_DATE', 'BANK_REF', 'BANK_DESC']
+        wp_preview = working_paper[display_cols].head(30).copy()
+        for c in ['LEDGER_DATE', 'BANK_DATE']:
+            wp_preview[c] = wp_preview[c].apply(lambda x: format_date(x) if pd.notna(x) else '')
+        for c in ['LEDGER_AMOUNT', 'BANK_AMOUNT']:
+            wp_preview[c] = wp_preview[c].apply(lambda x: f"{float(x):,.2f}" if pd.notna(x) and x != '' else '')
+        st.dataframe(wp_preview, use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("📄 Clean Bank Reconciliation")
+        bank_display = recon_statement.get('bank_name', '') or st.session_state.bank_name or 'Unknown Bank'
+        recon_preview = [
+            {"Step": f"Bank: {bank_display}", "Amount": ""},
+            {"Step": "Opening Bank Balance", "Amount": f"{recon_statement['opening_balance']:,.2f}"},
+            {"Step": "Closing Balance per Bank", "Amount": f"{recon_statement['bank_closing_balance']:,.2f}"},
+        ]
+        for _, item in recon_statement['recon_items'].iterrows():
+            recon_preview.append({"Step": item['description'], "Amount": f"{item['adjustment']:,.2f}"})
+        recon_preview += [
+            {"Step": "TOTAL ADJUSTMENTS", "Amount": f"{recon_statement['total_adjustment']:,.2f}"},
+            {"Step": "ADJUSTED BANK BALANCE", "Amount": f"{recon_statement['adjusted_balance']:,.2f}"},
+            {"Step": "LEDGER CLOSING BALANCE", "Amount": f"{recon_statement['ledger_balance']:,.2f}"},
+            {"Step": "UNRECONCILED DIFFERENCE", "Amount": f"{recon_statement['difference']:,.2f}"},
+        ]
+        st.dataframe(pd.DataFrame(recon_preview), use_container_width=True)
+
+        st.subheader("🔎 Why the Difference Exists")
+        diagnostic = pd.DataFrame([
+            {"Diagnostic": "Opening Bank Balance", "Amount": recon_statement['opening_balance']},
+            {"Diagnostic": "Bank Movement", "Amount": recon_statement['bank_movement']},
+            {"Diagnostic": "Ledger Movement", "Amount": recon_statement['ledger_movement']},
+            {"Diagnostic": "Movement Difference", "Amount": recon_statement['movement_difference']},
+            {"Diagnostic": "Final Difference", "Amount": recon_statement['difference']},
+        ])
+        st.dataframe(diagnostic, use_container_width=True)
+
+        if abs(recon_statement['difference']) < 0.01:
+            st.success("✅ Reconciled!")
+        else:
+            st.warning("⚠️ Investigation required.")
+
+        # AI Assistant for bank
+        st.markdown("---")
+        st.subheader("💬 Chipo – Your Centre of Intelligence")
+        api_key = None
+        try:
+            api_key = st.secrets.get("GROQ_API_KEY", None) if hasattr(st, "secrets") else None
+        except:
+            pass
+        if not api_key:
+            st.info("ℹ️ No Groq API key found. Using rule‑based assistant.")
+        else:
+            st.success("✅ AI enabled using Groq (free)")
+
+        for msg in st.session_state.chat_history:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        if prompt := st.chat_input("Ask Chipo about the bank reconciliation..."):
+            st.session_state.chat_history.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            with st.chat_message("assistant"):
+                with st.spinner("Chipo is thinking..."):
+                    context = get_ai_context(match_results, recon_statement)
+                    response = get_ai_response(prompt, context, api_key)
+                    st.markdown(response)
+                    st.session_state.chat_history.append({"role": "assistant", "content": response})
+
+        col_q1, col_q2, col_q3, col_q4 = st.columns(4)
+        with col_q1:
+            if st.button("❓ Why difference?"):
+                prompt = "Why is there a difference?"
+                st.session_state.chat_history.append({"role": "user", "content": prompt})
                 context = get_ai_context(match_results, recon_statement)
                 response = get_ai_response(prompt, context, api_key)
-                st.markdown(response)
                 st.session_state.chat_history.append({"role": "assistant", "content": response})
+                safe_rerun()
+        with col_q2:
+            if st.button("📊 Unmatched count"):
+                prompt = "How many unmatched transactions are there?"
+                st.session_state.chat_history.append({"role": "user", "content": prompt})
+                context = get_ai_context(match_results, recon_statement)
+                response = get_ai_response(prompt, context, api_key)
+                st.session_state.chat_history.append({"role": "assistant", "content": response})
+                safe_rerun()
+        with col_q3:
+            if st.button("🔍 What to investigate first?"):
+                prompt = "What should I investigate first?"
+                st.session_state.chat_history.append({"role": "user", "content": prompt})
+                context = get_ai_context(match_results, recon_statement)
+                response = get_ai_response(prompt, context, api_key)
+                st.session_state.chat_history.append({"role": "assistant", "content": response})
+                safe_rerun()
+        with col_q4:
+            if st.button("🧹 Clear Chat"):
+                st.session_state.chat_history = []
+                safe_rerun()
 
-    col_q1, col_q2, col_q3, col_q4 = st.columns(4)
-    with col_q1:
-        if st.button("❓ Why is there a difference?"):
-            prompt = "Why is there a difference?"
-            st.session_state.chat_history.append({"role": "user", "content": prompt})
-            context = get_ai_context(match_results, recon_statement)
-            response = get_ai_response(prompt, context, api_key)
-            st.session_state.chat_history.append({"role": "assistant", "content": response})
-            safe_rerun()
-    with col_q2:
-        if st.button("📊 Show unmatched count"):
-            prompt = "How many unmatched transactions are there?"
-            st.session_state.chat_history.append({"role": "user", "content": prompt})
-            context = get_ai_context(match_results, recon_statement)
-            response = get_ai_response(prompt, context, api_key)
-            st.session_state.chat_history.append({"role": "assistant", "content": response})
-            safe_rerun()
-    with col_q3:
-        if st.button("🔍 What should I investigate first?"):
-            prompt = "What should I investigate first?"
-            st.session_state.chat_history.append({"role": "user", "content": prompt})
-            context = get_ai_context(match_results, recon_statement)
-            response = get_ai_response(prompt, context, api_key)
-            st.session_state.chat_history.append({"role": "assistant", "content": response})
-            safe_rerun()
-    with col_q4:
-        if st.button("🧹 Clear Conversation", use_container_width=True):
-            st.session_state.chat_history = []
-            safe_rerun()
+# =========================
+# Supplier Reconciliation Tab
+# =========================
+with tab_supplier:
+    st.markdown(
+        """
+        <div class="hero" style="text-align:center; border: none; background: transparent; padding: 10px 0;">
+            <div class="title">🔄 Supplier Reconciliation</div>
+            <div class="subtitle">Upload Supplier Statement and Vendor Ledger – fully automatic, no manual mapping needed.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    col_s1, col_s2 = st.columns(2)
+    with col_s1:
+        supplier_file = st.file_uploader(
+            "Supplier Statement / Invoice List",
+            type=["xlsx", "xls"],
+            help="Upload the supplier's statement or invoice list.",
+            key="supplier_file"
+        )
+    with col_s2:
+        vendor_ledger_file = st.file_uploader(
+            "Vendor Ledger",
+            type=["xlsx", "xls"],
+            help="Upload your vendor ledger extract.",
+            key="vendor_ledger_file"
+        )
+
+    tolerance = st.slider("Amount tolerance", 0.0, 1.0, 0.01, 0.01, help="Maximum difference for a match.", key="supplier_tolerance")
+
+    if st.button("🚀 Run Supplier Reconciliation", use_container_width=True, key="run_supplier_recon"):
+        if not supplier_file or not vendor_ledger_file:
+            st.error("Please upload both files.")
+        else:
+            with st.spinner("Processing..."):
+                try:
+                    result, error = reconcile_supplier(supplier_file, vendor_ledger_file, tolerance)
+                    if error:
+                        st.error(f"Error: {error}")
+                    else:
+                        st.success(f"✅ Reconciliation complete! {result['summary']['matched']} matches.")
+                        st.markdown("#### Working Paper Preview")
+                        st.dataframe(result['working_paper'], use_container_width=True)
+                        # Download
+                        excel_data = export_to_excel_supplier(result['working_paper'], result['match_results'])
+                        st.download_button(
+                            "📥 Download Supplier Reconciliation Report",
+                            data=excel_data,
+                            file_name=f"supplier_reconciliation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                        )
+                except Exception as e:
+                    st.error(f"Error: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
 
 # =========================
 # Footer with logout
 # =========================
 st.markdown("")
-logout_c1, logout_c2, logout_c3 = st.columns([1, 1, 1])
+logout_c1, logout_c2, logout_c3 = st.columns([1,1,1])
 with logout_c2:
     if st.button("Logout", use_container_width=True):
         logout()
