@@ -2,30 +2,23 @@ import subprocess
 import sys
 import os
 import site
+import importlib
 import warnings
-import io
-import pickle
-import re
-import tempfile
-import hashlib
-import time
-from datetime import datetime, date, timezone, timedelta
-from copy import copy as pycopy
-from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter, column_index_from_string
-from openpyxl.styles import numbers, Font, Alignment, PatternFill, Border, Side
-import pandas as pd
-import numpy as np
-import streamlit as st
-from dateutil.parser import parse as dt_parse
 
 # ==============================================
-# FORCE INSTALL MISSING DEPENDENCIES (failsafe)
+# BULLETPROOF DEPENDENCY INSTALLER (failsafe)
 # ==============================================
+# Create a writable directory for extra packages
 extra_lib = os.path.join(os.getcwd(), 'extra_libs')
 os.makedirs(extra_lib, exist_ok=True)
 sys.path.insert(0, extra_lib)
 
+# Also add the user site‑packages (if it exists)
+user_site = site.getusersitepackages()
+if user_site not in sys.path:
+    sys.path.insert(0, user_site)
+
+# Mapping: (import_name, package_name)
 required_packages = [
     ('streamlit', 'streamlit'),
     ('pandas', 'pandas'),
@@ -38,22 +31,51 @@ required_packages = [
 
 for import_name, pkg_name in required_packages:
     try:
-        __import__(import_name)
+        importlib.import_module(import_name)
     except ImportError:
-        subprocess.check_call([
-            sys.executable, "-m", "pip", "install",
-            "--target", extra_lib,
-            "--no-cache-dir",
-            pkg_name
-        ])
-        __import__(import_name)
+        # Try --target first (local folder)
+        try:
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install",
+                "--target", extra_lib,
+                "--no-cache-dir",
+                pkg_name
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except subprocess.CalledProcessError:
+            # If --target fails, try --user (works on most cloud environments)
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install",
+                "--user",
+                "--no-cache-dir",
+                pkg_name
+            ])
+        # Force re‑import
+        importlib.invalidate_caches()
+        importlib.import_module(import_name)
+
+# Now import everything normally
+import streamlit as st
+import pandas as pd
+import numpy as np
+import re
+import tempfile
+import hashlib
+import time
+import io
+import pickle
+from datetime import datetime, date, timezone, timedelta
+from copy import copy as pycopy
+from dateutil.parser import parse as dt_parse
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter, column_index_from_string
+from openpyxl.styles import numbers, Font, Alignment, PatternFill, Border, Side
 
 warnings.filterwarnings("ignore")
 
 # =========================
 # App config & security
 # =========================
-APP_VERSION = "3.3.1"
+APP_VERSION = "3.3.2"
 APP_NAME = "Bank & Supplier Reconciliation"
 DEPLOYMENT_MODE = os.environ.get("DEPLOYMENT_MODE", "production")
 SESSION_TIMEOUT_MINUTES = 60
@@ -1205,7 +1227,7 @@ def export_to_excel_bank(working_paper_df, recon_statement, bank_df, ledger_df, 
     return output.getvalue()
 
 # =========================
-# AI Assistant (Bank) – unchanged
+# AI Assistant (Bank)
 # =========================
 def get_ai_context(match_results, recon_statement):
     context = "Here is the summary of the bank reconciliation:\n\n"
@@ -1241,7 +1263,7 @@ def get_ai_response(user_question, context, api_key):
         "You are warm, clear, and professional. Always respond in a helpful and encouraging tone.\n\n"
         "Use the following context to answer the user's questions:\n\n" + context
     )
-    if api_key and 'GROQ_AVAILABLE' in globals():
+    if api_key:
         try:
             from groq import Groq
             client = Groq(api_key=api_key)
@@ -1309,7 +1331,7 @@ def get_rule_based_response(user_question, context):
                 "If you provide more details, I can give a more specific answer. I'm here to make your reconciliation easy!")
 
 # =========================
-# Supplier Reconciliation Engine (from earlier)
+# Supplier Reconciliation Engine
 # =========================
 def detect_header_row_supplier(df_raw, max_scan=80):
     best_score = -1
@@ -1768,7 +1790,7 @@ def export_to_excel_supplier_template(working_paper_df, match_results, summary,
 # =========================
 tab_bank, tab_supplier = st.tabs(["🏦 Bank Reconciliation", "🔄 Supplier Reconciliation"])
 
-# --- Bank Tab (fully restored) ---
+# --- Bank Tab ---
 with tab_bank:
     st.markdown(
         """
@@ -1780,7 +1802,6 @@ with tab_bank:
         unsafe_allow_html=True,
     )
 
-    # Bank Name input
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("🏦 Bank Name")
     bank_name = st.text_input(
